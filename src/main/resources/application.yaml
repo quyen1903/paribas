@@ -1,0 +1,44 @@
+spring:
+  application:
+    name: core
+  datasource:
+    url: jdbc:postgresql://localhost:5432/quinn_banking
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+  flyway:
+    locations: classpath:db/migration/identity
+    default-schema: identity
+    schemas: identity
+    create-schemas: true
+    baseline-on-migrate: false
+    clean-disabled: true
+    validate-on-migrate: true
+    validate-migration-naming: true
+
+quinnbank:
+  identity:
+    authentication:
+      issuer: ${JWT_ISSUER:https://auth.quinnbank.example.invalid}
+      access-audience: ${JWT_ACCESS_AUDIENCE:quinnbank-core-api}
+      refresh-audience: ${JWT_REFRESH_AUDIENCE:quinnbank-core-refresh}
+      access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:PT5M}
+      refresh-token-ttl: ${JWT_REFRESH_TOKEN_TTL:P7D}
+      clock-skew: ${JWT_CLOCK_SKEW:PT30S}
+      login-lock-threshold: ${IDENTITY_LOGIN_LOCK_THRESHOLD:5}
+      login-lock-duration: ${IDENTITY_LOGIN_LOCK_DURATION:PT15M}
+      bcrypt-strength: ${IDENTITY_BCRYPT_STRENGTH:12}
+      signing-key-id: ${JWT_SIGNING_KEY_ID:}
+      private-key-location: ${JWT_PRIVATE_KEY_LOCATION:}
+      public-key-location: ${JWT_PUBLIC_KEY_LOCATION:}
+      trusted-public-key-sha256: ${JWT_TRUSTED_PUBLIC_KEY_SHA256:}
+      registration-limit-per-minute: ${IDENTITY_REGISTRATION_LIMIT_PER_MINUTE:5}
+      login-source-limit-per-minute: ${IDENTITY_LOGIN_SOURCE_LIMIT_PER_MINUTE:20}
+      login-identifier-limit-per-minute: ${IDENTITY_LOGIN_IDENTIFIER_LIMIT_PER_MINUTE:10}
+      refresh-limit-per-minute: ${IDENTITY_REFRESH_LIMIT_PER_MINUTE:30}
