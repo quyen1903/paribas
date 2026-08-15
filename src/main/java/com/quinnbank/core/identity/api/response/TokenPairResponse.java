@@ -6,23 +6,23 @@ import java.time.Instant;
 import java.util.UUID;
 
 public record TokenPairResponse(
-        UUID identityId,
-        String tokenType,
-        String accessToken,
-        Instant accessExpiresAt,
-        String refreshToken,
-        Instant refreshExpiresAt
+    UUID identityId,
+    String tokenType,
+    String accessToken,
+    Instant accessExpiresAt,
+    String refreshToken,
+    Instant refreshExpiresAt
 ) {
     private static final String BEARER_TOKEN_TYPE = "Bearer";
 
     public static TokenPairResponse from(IssuedTokenPair issuedTokenPair) {
         return new TokenPairResponse(
-                issuedTokenPair.identityId(),
-                BEARER_TOKEN_TYPE,
-                issuedTokenPair.accessToken(),
-                issuedTokenPair.accessExpiresAt(),
-                issuedTokenPair.refreshToken(),
-                issuedTokenPair.refreshExpiresAt()
+            issuedTokenPair.identityId(),
+            BEARER_TOKEN_TYPE,
+            issuedTokenPair.accessToken(),
+            issuedTokenPair.accessExpiresAt(),
+            issuedTokenPair.refreshToken(),
+            issuedTokenPair.refreshExpiresAt()
         );
     }
 

@@ -3,6 +3,7 @@ package com.quinnbank.core.identity.infrastructure.persistence;
 import com.quinnbank.core.identity.application.port.JwtSigningKeyRepository;
 import com.quinnbank.core.identity.domain.JwtSigningKey;
 import com.quinnbank.core.identity.domain.enums.JwtSigningKeyStatus;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +18,7 @@ import java.util.HexFormat;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 @SpringBootTest
 @Transactional
@@ -28,6 +30,9 @@ class JwtSigningKeyRotationPersistenceTest {
 
     @Autowired
     private JwtSigningKeyRepository signingKeys;
+
+    @Autowired
+    private EntityManager entityManager;
 
     @BeforeAll
     static void generateEphemeralPublicKeys() throws Exception {
@@ -42,30 +47,47 @@ class JwtSigningKeyRotationPersistenceTest {
     }
 
     @Test
-    void demotesTheCurrentKeyBeforeInsertingItsActiveReplacement() {
+    void persistsMultipleVerificationKeysWithoutGlobalActiveKeyRotation() {
         Instant now = Instant.now();
-        JwtSigningKey current = signingKeys.findActiveForUpdate().orElseGet(() -> signingKeys.save(
-                JwtSigningKey.register(
-                        uniqueKeyId("initial"),
-                        initialPublicKeyDer,
-                        initialFingerprint,
-                        now.minusSeconds(1)
-                )
+        JwtSigningKey initial = signingKeys.save(JwtSigningKey.register(
+                uniqueKeyId("initial"),
+                initialPublicKeyDer,
+                initialFingerprint,
+                now.minusSeconds(1)
         ));
-        Instant transitionTime = current.getUpdatedAt().isAfter(now) ? current.getUpdatedAt() : now;
-
-        current.restrictToVerification(transitionTime);
-        signingKeys.save(current);
         JwtSigningKey replacement = signingKeys.save(JwtSigningKey.register(
                 uniqueKeyId("replacement"),
                 replacementPublicKeyDer,
                 replacementFingerprint,
-                transitionTime
+                now
         ));
+        entityManager.flush();
+        entityManager.clear();
 
-        assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, current.getStatus());
-        assertEquals(JwtSigningKeyStatus.ACTIVE, replacement.getStatus());
-        assertEquals(replacement.getKeyId(), signingKeys.findActiveForUpdate().orElseThrow().getKeyId());
+        JwtSigningKey storedInitial = signingKeys.findByKeyId(initial.getKeyId()).orElseThrow();
+        JwtSigningKey storedReplacement = signingKeys.findByKeyId(replacement.getKeyId()).orElseThrow();
+        assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, storedInitial.getStatus());
+        assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, storedReplacement.getStatus());
+        assertEquals(initial.getKeyId(), storedInitial.getKeyId());
+        assertEquals(replacement.getKeyId(), storedReplacement.getKeyId());
+
+        Number obsoleteActiveIndexCount = (Number) entityManager.createNativeQuery("""
+                SELECT COUNT(*)
+                FROM pg_indexes
+                WHERE schemaname = 'identity'
+                  AND indexname = 'uk_jwt_signing_keys_single_active'
+                """).getSingleResult();
+        String statusConstraint = (String) entityManager.createNativeQuery("""
+                SELECT pg_get_constraintdef(constraint_row.oid)
+                FROM pg_constraint constraint_row
+                JOIN pg_class table_row ON table_row.oid = constraint_row.conrelid
+                JOIN pg_namespace schema_row ON schema_row.oid = table_row.relnamespace
+                WHERE schema_row.nspname = 'identity'
+                  AND table_row.relname = 'jwt_signing_keys'
+                  AND constraint_row.conname = 'ck_jwt_signing_keys_status'
+                """).getSingleResult();
+        assertEquals(0L, obsoleteActiveIndexCount.longValue());
+        assertFalse(statusConstraint.contains("ACTIVE"));
     }
 
     private static String fingerprint(byte[] publicKeyDer) throws Exception {

@@ -48,15 +48,15 @@ public class RegisterIdentityService {
     private final Clock clock;
 
     public RegisterIdentityService(
-            IdentityAccountRepository identityAccounts,
-            AuthenticationSessionRepository sessions,
-            AuthenticationAuditRepository audits,
-            PasswordService passwords,
-            RegistrationPasswordPolicy passwordPolicy,
-            AuthenticationPolicy authenticationPolicy,
-            AuthenticationThrottle throttle,
-            TokenPairService tokenPairs,
-            Clock clock
+        IdentityAccountRepository identityAccounts,
+        AuthenticationSessionRepository sessions,
+        AuthenticationAuditRepository audits,
+        PasswordService passwords,
+        RegistrationPasswordPolicy passwordPolicy,
+        AuthenticationPolicy authenticationPolicy,
+        AuthenticationThrottle throttle,
+        TokenPairService tokenPairs,
+        Clock clock
     ) {
         this.identityAccounts = identityAccounts;
         this.sessions = sessions;
@@ -88,24 +88,24 @@ public class RegisterIdentityService {
 
         UUID identityId = UUID.randomUUID();
         IdentityAccount identity = IdentityAccount.provision(
-                identityId,
-                identityId,
-                IdentityActorType.RETAIL_CUSTOMER,
-                loginIdentifier,
-                passwords.encode(command.rawPassword()),
-                REGISTRATION_SERVICE,
-                command.correlationId(),
-                now
+            identityId,
+            identityId,//this bug need to be fix, we have to pass the ID from KYC instead.
+            IdentityActorType.RETAIL_CUSTOMER,
+            loginIdentifier,
+            passwords.encode(command.rawPassword()),
+            REGISTRATION_SERVICE,
+            command.correlationId(),
+            now
         );
         identity.enable(REGISTRATION_SERVICE, command.correlationId(), now);
         identityAccounts.save(identity);
 
         AuthenticationSession session = AuthenticationSession.open(
-                UUID.randomUUID(),
-                identityId,
-                UUID.randomUUID(),
-                now.plus(authenticationPolicy.refreshTokenTtl()),
-                now
+            UUID.randomUUID(),
+            identityId,
+            UUID.randomUUID(),
+            now.plus(authenticationPolicy.refreshTokenTtl()),
+            now
         );
         sessions.save(session);
         IssuedTokenPair issuedTokens = tokenPairs.issuePair(identity, session, now);
@@ -121,13 +121,13 @@ public class RegisterIdentityService {
             Instant now
     ) {
         return AuthenticationAuditEvent.recordAnonymous(
-                IdentityActorType.RETAIL_CUSTOMER,
-                AuthenticationAction.REGISTRATION_REJECTED,
-                AuthenticationDecision.FAILURE,
-                AuthenticationMethod.PASSWORD,
-                "REGISTRATION_REJECTED",
-                correlationId,
-                now
+            IdentityActorType.RETAIL_CUSTOMER,
+            AuthenticationAction.REGISTRATION_REJECTED,
+            AuthenticationDecision.FAILURE,
+            AuthenticationMethod.PASSWORD,
+            "REGISTRATION_REJECTED",
+            correlationId,
+            now
         );
     }
 
@@ -137,14 +137,14 @@ public class RegisterIdentityService {
             Instant now
     ) {
         return AuthenticationAuditEvent.recordForKnownIdentity(
-                identity.getId(),
-                AuthenticationActor.of(identity.getActorType(), identity.getSubjectId().toString()),
-                AuthenticationAction.TOKEN_PAIR_ISSUED,
-                AuthenticationDecision.SUCCESS,
-                AuthenticationMethod.JWT,
-                "TOKEN_PAIR_ISSUED",
-                correlationId,
-                now
+            identity.getId(),
+            AuthenticationActor.of(identity.getActorType(), identity.getSubjectId().toString()),
+            AuthenticationAction.TOKEN_PAIR_ISSUED,
+            AuthenticationDecision.SUCCESS,
+            AuthenticationMethod.JWT,
+            "TOKEN_PAIR_ISSUED",
+            correlationId,
+            now
         );
     }
 }

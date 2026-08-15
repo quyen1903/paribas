@@ -7,7 +7,5 @@ import java.util.Optional;
 public interface JwtSigningKeyRepository {
     Optional<JwtSigningKey> findByKeyId(String keyId);
 
-    Optional<JwtSigningKey> findActiveForUpdate();
-
     JwtSigningKey save(JwtSigningKey signingKey);
 }

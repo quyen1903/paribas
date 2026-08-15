@@ -52,14 +52,13 @@ class JwtSigningKeyTest {
         assertAll(
                 () -> assertEquals("identity-rs256-2026-08", key.getKeyId()),
                 () -> assertEquals(JwtSigningAlgorithm.RS256, key.getAlgorithm()),
-                () -> assertEquals(JwtSigningKeyStatus.ACTIVE, key.getStatus()),
+                () -> assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, key.getStatus()),
                 () -> assertEquals(publicKeyFingerprint, key.getPublicKeySha256()),
                 () -> assertArrayEquals(publicKeyDer, secondRead),
                 () -> assertNotSame(firstRead, secondRead),
                 () -> assertTrue(key.matchesMaterial(publicKeyDer, publicKeyFingerprint)),
-                () -> assertTrue(key.canSign(CREATED_AT)),
                 () -> assertTrue(key.canVerify(CREATED_AT)),
-                () -> assertNull(key.getVerifyOnlyAt()),
+                () -> assertEquals(CREATED_AT, key.getVerifyOnlyAt()),
                 () -> assertNull(key.getRevokedAt())
         );
     }
@@ -100,29 +99,21 @@ class JwtSigningKeyTest {
     }
 
     @Test
-    void activeKeyMovesToVerifyOnlyAndThenRevokedWithoutReactivation() {
+    void verificationKeyCanBeRevokedWithoutReactivation() {
         JwtSigningKey key = registeredKey();
-        Instant verifyOnlyAt = CREATED_AT.plusSeconds(60);
-
-        key.restrictToVerification(verifyOnlyAt);
 
         assertAll(
                 () -> assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, key.getStatus()),
-                () -> assertFalse(key.canSign(verifyOnlyAt)),
-                () -> assertTrue(key.canVerify(verifyOnlyAt)),
-                () -> assertEquals(verifyOnlyAt, key.getVerifyOnlyAt()),
-                () -> assertThrows(
-                        IllegalStateException.class,
-                        () -> key.restrictToVerification(verifyOnlyAt.plusSeconds(1))
-                )
+                () -> assertTrue(key.canVerify(CREATED_AT)),
+                () -> assertEquals(CREATED_AT, key.getVerifyOnlyAt()),
+                () -> assertNull(key.getRevokedAt())
         );
 
-        Instant revokedAt = verifyOnlyAt.plusSeconds(60);
+        Instant revokedAt = CREATED_AT.plusSeconds(60);
         key.revoke(revokedAt);
 
         assertAll(
                 () -> assertEquals(JwtSigningKeyStatus.REVOKED, key.getStatus()),
-                () -> assertFalse(key.canSign(revokedAt)),
                 () -> assertFalse(key.canVerify(revokedAt)),
                 () -> assertEquals(revokedAt, key.getRevokedAt()),
                 () -> assertThrows(IllegalStateException.class, () -> key.revoke(revokedAt)),
@@ -136,12 +127,13 @@ class JwtSigningKeyTest {
 
         assertThrows(
                 IllegalArgumentException.class,
-                () -> key.restrictToVerification(CREATED_AT.minusSeconds(1))
+                () -> key.revoke(CREATED_AT.minusSeconds(1))
         );
         assertAll(
-                () -> assertEquals(JwtSigningKeyStatus.ACTIVE, key.getStatus()),
+                () -> assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, key.getStatus()),
                 () -> assertEquals(CREATED_AT, key.getUpdatedAt()),
-                () -> assertNull(key.getVerifyOnlyAt())
+                () -> assertEquals(CREATED_AT, key.getVerifyOnlyAt()),
+                () -> assertNull(key.getRevokedAt())
         );
     }
 

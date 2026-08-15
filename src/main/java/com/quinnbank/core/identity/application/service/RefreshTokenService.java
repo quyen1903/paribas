@@ -85,10 +85,10 @@ public class RefreshTokenService {
         }
 
         RefreshTokenRotationResult rotation = session.rotateRefreshToken(
-                verified.tokenId(),
-                UUID.randomUUID(),
-                session.getExpiresAt(),
-                now
+            verified.tokenId(),
+            UUID.randomUUID(),
+            session.getExpiresAt(),
+            now
         );
         if (rotation == RefreshTokenRotationResult.REPLAY_DETECTED) {
             sessions.save(session);
@@ -103,12 +103,12 @@ public class RefreshTokenService {
         sessions.save(session);
         IssuedTokenPair issuedTokens = tokenPairs.issuePair(identity, session, now);
         audits.saveAll(List.of(knownEvent(
-                identity,
-                AuthenticationAction.TOKEN_REFRESHED,
-                AuthenticationDecision.SUCCESS,
-                "TOKEN_REFRESHED",
-                command.correlationId(),
-                now
+            identity,
+            AuthenticationAction.TOKEN_REFRESHED,
+            AuthenticationDecision.SUCCESS,
+            "TOKEN_REFRESHED",
+            command.correlationId(),
+            now
         )));
         return issuedTokens;
     }
@@ -132,13 +132,13 @@ public class RefreshTokenService {
 
     private void rejectAnonymous(String correlationId, Instant now) {
         audits.saveAll(List.of(AuthenticationAuditEvent.recordAnonymous(
-                IdentityActorType.RETAIL_CUSTOMER,
-                AuthenticationAction.TOKEN_REFRESH_REJECTED,
-                AuthenticationDecision.FAILURE,
-                AuthenticationMethod.JWT,
-                "INVALID_REFRESH_TOKEN",
-                correlationId,
-                now
+            IdentityActorType.RETAIL_CUSTOMER,
+            AuthenticationAction.TOKEN_REFRESH_REJECTED,
+            AuthenticationDecision.FAILURE,
+            AuthenticationMethod.JWT,
+            "INVALID_REFRESH_TOKEN",
+            correlationId,
+            now
         )));
         throw new InvalidRefreshTokenException();
     }
@@ -156,22 +156,22 @@ public class RefreshTokenService {
     ) {
         List<AuthenticationAuditEvent> events = new ArrayList<>();
         events.add(knownEvent(
-                identity,
-                AuthenticationAction.REFRESH_TOKEN_REPLAY_DETECTED,
-                AuthenticationDecision.FAILURE,
-                "REFRESH_TOKEN_REPLAY_DETECTED",
-                correlationId,
-                now,
-                false
+            identity,
+            AuthenticationAction.REFRESH_TOKEN_REPLAY_DETECTED,
+            AuthenticationDecision.FAILURE,
+            "REFRESH_TOKEN_REPLAY_DETECTED",
+            correlationId,
+            now,
+            false
         ));
         events.add(knownEvent(
-                identity,
-                AuthenticationAction.SESSION_REVOKED,
-                AuthenticationDecision.SUCCESS,
-                "REFRESH_TOKEN_REPLAY_DETECTED",
-                correlationId,
-                now,
-                false
+            identity,
+            AuthenticationAction.SESSION_REVOKED,
+            AuthenticationDecision.SUCCESS,
+            "REFRESH_TOKEN_REPLAY_DETECTED",
+            correlationId,
+            now,
+            false
         ));
         return events;
     }

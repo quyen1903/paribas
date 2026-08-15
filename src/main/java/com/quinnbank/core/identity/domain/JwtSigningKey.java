@@ -66,14 +66,14 @@ public class JwtSigningKey {
     }
 
     /**
-     * Registers an RSA public key as the sole key eligible for new signatures.
-     * Private key material must remain in an approved KMS, HSM, or secret store.
+     * Registers an RSA public key for verification of an already-issued token
+     * pair. Private key material is transient and must never enter this entity.
      */
     public static JwtSigningKey register(
-            String keyId,
-            byte[] publicKeyDer,
-            String publicKeySha256,
-            Instant now
+        String keyId,
+        byte[] publicKeyDer,
+        String publicKeySha256,
+        Instant now
     ) {
         String requiredKeyId = requireKeyId(keyId);
         Instant requiredNow = requirePresent(now, "now");
@@ -88,27 +88,17 @@ public class JwtSigningKey {
         signingKey.algorithm = JwtSigningAlgorithm.RS256;
         signingKey.publicKeyDer = validatedPublicKey;
         signingKey.publicKeySha256 = requiredFingerprint;
-        signingKey.status = JwtSigningKeyStatus.ACTIVE;
+        signingKey.status = JwtSigningKeyStatus.VERIFY_ONLY;
+        signingKey.verifyOnlyAt = requiredNow;
         signingKey.createdAt = requiredNow;
         signingKey.updatedAt = requiredNow;
         return signingKey;
     }
 
-    public void restrictToVerification(Instant now) {
-        requireTransitionTime(now);
-        if (status != JwtSigningKeyStatus.ACTIVE) {
-            throw new IllegalStateException("Only an active signing key can become verify-only.");
-        }
-
-        status = JwtSigningKeyStatus.VERIFY_ONLY;
-        verifyOnlyAt = now;
-        updatedAt = now;
-    }
-
     public void revoke(Instant now) {
         requireTransitionTime(now);
-        if (status == JwtSigningKeyStatus.REVOKED) {
-            throw new IllegalStateException("JWT signing key is already revoked.");
+        if (status != JwtSigningKeyStatus.VERIFY_ONLY) {
+            throw new IllegalStateException("Only a verification key can be revoked.");
         }
 
         status = JwtSigningKeyStatus.REVOKED;
@@ -116,15 +106,9 @@ public class JwtSigningKey {
         updatedAt = now;
     }
 
-    public boolean canSign(Instant now) {
-        requirePresent(now, "now");
-        return status == JwtSigningKeyStatus.ACTIVE && !now.isBefore(createdAt);
-    }
-
     public boolean canVerify(Instant now) {
         requirePresent(now, "now");
-        return (status == JwtSigningKeyStatus.ACTIVE || status == JwtSigningKeyStatus.VERIFY_ONLY)
-                && !now.isBefore(createdAt);
+        return status == JwtSigningKeyStatus.VERIFY_ONLY && !now.isBefore(createdAt);
     }
 
     public boolean matchesMaterial(byte[] candidatePublicKeyDer, String candidatePublicKeySha256) {
@@ -136,9 +120,9 @@ public class JwtSigningKey {
         }
 
         return MessageDigest.isEqual(publicKeyDer, candidatePublicKeyDer)
-                && MessageDigest.isEqual(
-                publicKeySha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
-                candidatePublicKeySha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII)
+            && MessageDigest.isEqual(
+            publicKeySha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+            candidatePublicKeySha256.getBytes(java.nio.charset.StandardCharsets.US_ASCII)
         );
     }
 

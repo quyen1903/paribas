@@ -3,10 +3,10 @@ package com.quinnbank.core.identity.api.response;
 import java.util.Map;
 
 public record IdentityApiErrorResponse(
-        String code,
-        String message,
-        String correlationId,
-        Map<String, String> fieldErrors
+    String code,
+    String message,
+    String correlationId,
+    Map<String, String> fieldErrors
 ) {
     public IdentityApiErrorResponse {
         fieldErrors = Map.copyOf(fieldErrors);
@@ -18,10 +18,10 @@ public record IdentityApiErrorResponse(
 
     public static IdentityApiErrorResponse validation(String correlationId, Map<String, String> fieldErrors) {
         return new IdentityApiErrorResponse(
-                "VALIDATION_FAILED",
-                "The request contains invalid fields.",
-                correlationId,
-                fieldErrors
+            "VALIDATION_FAILED",
+            "The request contains invalid fields.",
+            correlationId,
+            fieldErrors
         );
     }
 }

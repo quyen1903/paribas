@@ -19,6 +19,7 @@ import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.interfaces.RSAPublicKey;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -28,17 +29,20 @@ public class DatabaseJwkSource implements JWKSource<SecurityContext> {
     private static final Pattern KEY_ID_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,99}");
 
     private final JwtSigningKeyRepository signingKeys;
-    private final ExternalRsaSigningKeyMaterialProvider trustedKeyProvider;
     private final Clock clock;
+    private final Duration clockSkew;
 
     public DatabaseJwkSource(
-            JwtSigningKeyRepository signingKeys,
-            ExternalRsaSigningKeyMaterialProvider trustedKeyProvider,
-            Clock clock
+        JwtSigningKeyRepository signingKeys,
+        Clock clock,
+        Duration clockSkew
     ) {
         this.signingKeys = signingKeys;
-        this.trustedKeyProvider = trustedKeyProvider;
         this.clock = clock;
+        if (clockSkew == null || clockSkew.isNegative() || clockSkew.compareTo(Duration.ofMinutes(5)) > 0) {
+            throw new IllegalArgumentException("clockSkew is invalid.");
+        }
+        this.clockSkew = clockSkew;
     }
 
     @Override
@@ -56,7 +60,7 @@ public class DatabaseJwkSource implements JWKSource<SecurityContext> {
             return List.of();
         }
 
-        Instant now = clock.instant();
+        Instant now = clock.instant().plus(clockSkew);
         JwtSigningKey signingKey = signingKeys.findByKeyId(keyId).orElse(null);
         if (signingKey == null
                 || signingKey.getAlgorithm() != JwtSigningAlgorithm.RS256
@@ -70,14 +74,14 @@ public class DatabaseJwkSource implements JWKSource<SecurityContext> {
             if (!MessageDigest.isEqual(
                     decodedFingerprint.getBytes(StandardCharsets.US_ASCII),
                     signingKey.getPublicKeySha256().getBytes(StandardCharsets.US_ASCII)
-            ) || !trustedKeyProvider.trustedPublicKeyFingerprints().contains(decodedFingerprint)) {
+            )) {
                 return List.of();
             }
             RSAKey jwk = new RSAKey.Builder(publicKey)
-                    .keyID(signingKey.getKeyId())
-                    .algorithm(JWSAlgorithm.RS256)
-                    .keyUse(KeyUse.SIGNATURE)
-                    .build();
+                .keyID(signingKey.getKeyId())
+                .algorithm(JWSAlgorithm.RS256)
+                .keyUse(KeyUse.SIGNATURE)
+                .build();
             return selector.select(new JWKSet(jwk));
         } catch (GeneralSecurityException | RuntimeException exception) {
             return List.of();

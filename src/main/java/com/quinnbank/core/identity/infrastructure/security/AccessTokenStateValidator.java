@@ -16,9 +16,9 @@ import java.util.UUID;
 
 public class AccessTokenStateValidator implements OAuth2TokenValidator<Jwt> {
     private static final OAuth2Error INVALID_TOKEN = new OAuth2Error(
-            "invalid_token",
-            "The token is no longer active.",
-            null
+        "invalid_token",
+        "The token is no longer active.",
+        null
     );
 
     private final IdentityAccountRepository identityAccounts;
@@ -26,9 +26,9 @@ public class AccessTokenStateValidator implements OAuth2TokenValidator<Jwt> {
     private final Clock clock;
 
     public AccessTokenStateValidator(
-            IdentityAccountRepository identityAccounts,
-            AuthenticationSessionRepository sessions,
-            Clock clock
+        IdentityAccountRepository identityAccounts,
+        AuthenticationSessionRepository sessions,
+        Clock clock
     ) {
         this.identityAccounts = identityAccounts;
         this.sessions = sessions;
@@ -51,7 +51,7 @@ public class AccessTokenStateValidator implements OAuth2TokenValidator<Jwt> {
                     || jwt.getIssuedAt() == null
                     || jwt.getExpiresAt() == null
                     || jwt.getIssuedAt().isBefore(
-                        AuthenticationTimestampPolicy.jwtCompatible(session.getCreatedAt())
+                    AuthenticationTimestampPolicy.jwtCompatible(session.getCreatedAt())
                 )
                     || jwt.getExpiresAt().isAfter(
                         AuthenticationTimestampPolicy.jwtCompatible(session.getExpiresAt())

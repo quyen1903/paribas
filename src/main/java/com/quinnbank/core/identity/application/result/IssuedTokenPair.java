@@ -5,11 +5,11 @@ import java.util.Objects;
 import java.util.UUID;
 
 public record IssuedTokenPair(
-        UUID identityId,
-        String accessToken,
-        Instant accessExpiresAt,
-        String refreshToken,
-        Instant refreshExpiresAt
+    UUID identityId,
+    String accessToken,
+    Instant accessExpiresAt,
+    String refreshToken,
+    Instant refreshExpiresAt
 ) {
     public IssuedTokenPair {
         Objects.requireNonNull(identityId, "identityId is required.");

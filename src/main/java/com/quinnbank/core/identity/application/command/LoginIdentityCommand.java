@@ -3,10 +3,10 @@ package com.quinnbank.core.identity.application.command;
 import java.util.Objects;
 
 public record LoginIdentityCommand(
-        String loginIdentifier,
-        String rawPassword,
-        String correlationId,
-        String sourceAddress
+    String loginIdentifier,
+    String rawPassword,
+    String correlationId,
+    String sourceAddress
 ) {
     public LoginIdentityCommand {
         Objects.requireNonNull(loginIdentifier, "loginIdentifier is required.");

@@ -76,7 +76,7 @@ Registration does not yet implement an idempotency key/replay record. A retry
 after a lost 201 can return a conflict while the first session remains valid.
 That is an explicit residual risk, not an idempotent contract.
 
-## JWT And Key Lifecycle
+## JWT And Ephemeral Key Lifecycle
 
 Both access and refresh tokens are RS256 JWTs produced by Spring Security's
 Nimbus integration. Access tokens default to five minutes; refresh sessions
@@ -89,28 +89,45 @@ Authentication/session timestamps are canonicalized to JWT NumericDate's
 whole-second precision. Validators cap token lifetime, bind issue/expiry to the
 session, and reject tokens issued before the session or credential state.
 
-The private RSA key signs tokens and is loaded from an external PKCS#8 file
-resource for this implementation. It is never stored in PostgreSQL or source.
-The database stores only the matching X.509/SPKI public key, its SHA-256
-fingerprint, `kid`, algorithm, status, and lifecycle timestamps. A public key
-can verify a token; it cannot regenerate a private key or mint a new token.
+Every token-pair issuance generates a new 3072-bit RSA key pair with the JDK
+security provider. The same ephemeral private key signs that issuance's access
+and refresh JWTs. A new opaque `kid` identifies the pair. The matching canonical
+X.509/SPKI public key, its recomputed SHA-256 fingerprint, algorithm, `kid`, and
+lifecycle timestamps are persisted as a verification-only key in the same
+application transaction before the token pair can be returned to the client.
+A public key can verify its two tokens; it cannot recreate the private key or
+mint another token.
 
-Verification trusts a database key only when its fingerprint is also anchored
-by the configured public-key resource or the configured trusted-fingerprint
-allowlist. Verification recomputes the fingerprint from the stored DER rather
-than trusting the stored fingerprint column alone. This prevents arbitrary
-database public-key substitution from being sufficient by itself. The
-application registers the configured public key on first issuance and moves
-the previous active key to verify-only during rotation. Verify-only keys accept
-tokens issued before retirement but cannot validate newly issued tokens. Key
-material is database-immutable; lifecycle transitions and attempted deletes
-are constrained, and status changes are recorded in an append-only database
-audit table.
+The private key is never written to PostgreSQL, configuration, source, logs,
+audit records, or an API response. It remains reachable only through the local
+issuance material while the two JWTs are encoded; after `issuePair` returns,
+the application retains no reference to it. This is reference disposal, not a
+guarantee that the JVM has immediately overwritten every provider-, library-,
+or JVM-owned memory copy. Heap-dump controls and process isolation therefore
+remain required. This in-process design is not equivalent to a non-exportable
+KMS/HSM key and still requires formal security-architecture approval before
+production use.
 
-Production deployments should replace file-backed private-key access with an
-approved KMS/HSM signer and provision/rotate the public record through a
-privileged change path. Key rotation remains a maker-checker/governance action,
-not a public API.
+JWT verification loads a public key by `kid` from PostgreSQL, decodes and
+validates its canonical RSA representation, and recomputes the SHA-256
+fingerprint instead of trusting the fingerprint column alone. This preserves
+the read-only signing-key-table compromise invariant: disclosure of every key
+row reveals public material only and cannot by itself mint a token. PostgreSQL
+is, however, now the verification trust root. An attacker able to insert or replace
+both a public key and its fingerprint, or to bypass the lifecycle triggers, can
+authorize an attacker-controlled signing key and forge JWTs for otherwise valid
+identity/session state. The recomputation detects corruption or a one-column
+substitution; it is not an independent trust anchor against database write
+compromise. Least-privilege database roles, immutable-key triggers, append-only
+key audit, write monitoring, and protected backups are therefore mandatory.
+
+Each public key is verification-only from registration and may later be
+revoked; there is no long-lived active signing key and no rotation of private
+material. Key records are database-immutable, deletes are rejected, lifecycle
+changes are constrained, and registration/status changes are recorded in the
+append-only key audit table. Because issuance creates one key row and one key
+audit event per token pair, governed retention, capacity monitoring, and an
+approved archival strategy are required before production scale.
 
 ## Audit And Data Classification
 
@@ -146,10 +163,14 @@ work must not silently baseline, rewrite, or delete that schema.
 
 V1 creates identities and authentication audit storage. V2 adds public JWT
 keys, append-only key audit, revocable authentication sessions, and expanded
-authentication audit actions. Neither migration stores private keys or raw
-tokens. If a deployed migration needs correction, add a later migration; do
-not edit an applied migration. Database rollback is forward-only through a new,
-reviewed migration.
+authentication audit actions. V3 converts any legacy active public key to
+verification-only and removes the single-active-key index so every issued pair
+can retain its own public key. V4 invalidates stale optimistic-lock versions and
+constrains all future key rows to verification-only or revoked states. No
+migration stores private keys or raw tokens.
+If a deployed migration needs correction, add a later migration; do not edit
+an applied migration. Database rollback is forward-only through a new, reviewed
+migration.
 
 ## Deferred Security And Product Work
 
@@ -165,30 +186,12 @@ Employee and back-office password login is intentionally denied until MFA is
 implemented. Also deferred: email/login ownership verification, recovery and
 password reset, logout/all-session revocation API, entitlement/role storage,
 step-up authentication, registration idempotency, a durable multi-node abuse
-limiter, trusted-proxy source attribution, KMS/HSM signing, key-change
-maker-checker workflow, operational alerting, and governed retention/database
-privileges. Access/session validation fails closed on database/key-state
+limiter, trusted-proxy source attribution, migration to a non-exportable
+KMS/HSM signer, operational alerting, key-table retention/archival, and governed
+database privileges. Per-issuance RSA generation also adds CPU cost to public
+authentication flows, so distributed abuse controls and capacity testing are
+release gates. Access/session validation fails closed on database/key-state
 failure, but those operational controls still need deployment verification.
-
-To run token issuance locally, generate a throwaway RSA key outside the
-repository and configure:
-
-```text
-JWT_SIGNING_KEY_ID=local-key-001
-JWT_PRIVATE_KEY_LOCATION=file:C:/path-outside-repo/private-key.pem
-JWT_PUBLIC_KEY_LOCATION=file:C:/path-outside-repo/public-key.pem
-```
-
-The private file must be unencrypted PKCS#8 readable only by the local process;
-the public file must be X.509 SubjectPublicKeyInfo. Production key handling must
-not use this local file pattern.
-
-During rotation, keep old public-key fingerprints in
-`JWT_TRUSTED_PUBLIC_KEY_SHA256` (comma-separated) until their refresh sessions
-expire, unless the key was compromised and must be rejected immediately.
-The file-backed provider caches key material for the process lifetime, so the
-key id, key files, and fingerprint allowlist must be changed atomically and the
-application restarted for a local-file rotation.
 
 ## Flyway Dependency Review
 
@@ -223,12 +226,14 @@ application restarted for a local-file rotation.
   JOSE JWT 10.9 under the Spring Boot BOM. No second JWT library was added.
 - Vulnerability review: OSV queries on 2026-08-04 returned no advisories for the
   resolved starter, Spring Security JOSE, or Nimbus versions.
-- Network/telemetry: the implementation supplies a database-backed `JWKSource`;
-  it does not configure issuer discovery, a remote JWK URL, telemetry, or a
-  hidden network destination.
-- Failure mode: invalid claims, untrusted/revoked keys, inactive identity or
-  session, and database/key lookup failures deny authentication. Missing private
-  signing material returns a safe service-unavailable response on issuance.
+- Network/telemetry: the implementation supplies a database-backed `JWKSource`
+  and generates per-issuance RSA material with the JDK security provider; it
+  does not configure issuer discovery, a remote JWK URL, telemetry, or a hidden
+  network destination.
+- Failure mode: invalid claims, unknown/revoked keys, fingerprint mismatch,
+  inactive identity or session, and database/key lookup failures deny
+  authentication. RSA generation or signing failure returns a safe
+  service-unavailable response and rolls back issuance.
 - Upgrade/removal: versions remain Boot-managed; replacing the library requires
   preserving the token/claim/key/session validation and negative-test contract.
 - Approval: repository implementation review is complete here; formal security

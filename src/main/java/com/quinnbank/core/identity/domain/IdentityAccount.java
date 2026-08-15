@@ -87,14 +87,14 @@ public class IdentityAccount {
     }
 
     public static IdentityAccount provision(
-            UUID id,
-            UUID subjectId,
-            IdentityActorType actorType,
-            String loginIdentifier,
-            EncodedPassword encodedPassword,
-            AuthenticationActor provisioningActor,
-            String correlationId,
-            Instant now
+        UUID id,
+        UUID subjectId,
+        IdentityActorType actorType,
+        String loginIdentifier,
+        EncodedPassword encodedPassword,
+        AuthenticationActor provisioningActor,
+        String correlationId,
+        Instant now
     ) {
         IdentityAccount account = new IdentityAccount();
         account.id = requirePresent(id, "id");
@@ -110,13 +110,13 @@ public class IdentityAccount {
         requirePresent(provisioningActor, "provisioningActor");
         requireCorrelationId(correlationId);
         account.recordAudit(
-                provisioningActor,
-                AuthenticationAction.ACCOUNT_PROVISIONED,
-                AuthenticationDecision.SUCCESS,
-                null,
-                "ACCOUNT_PROVISIONED",
-                correlationId,
-                now
+            provisioningActor,
+            AuthenticationAction.ACCOUNT_PROVISIONED,
+            AuthenticationDecision.SUCCESS,
+            null,
+            "ACCOUNT_PROVISIONED",
+            correlationId,
+            now
         );
         return account;
     }
@@ -153,13 +153,13 @@ public class IdentityAccount {
 
         updatedAt = now;
         recordAudit(
-                unauthenticatedActor(),
-                action,
-                AuthenticationDecision.FAILURE,
-                AuthenticationMethod.PASSWORD,
-                reasonCode,
-                correlationId,
-                now
+            unauthenticatedActor(),
+            action,
+            AuthenticationDecision.FAILURE,
+            AuthenticationMethod.PASSWORD,
+            reasonCode,
+            correlationId,
+            now
         );
     }
 
@@ -175,21 +175,21 @@ public class IdentityAccount {
         lastAuthenticatedAt = now;
         updatedAt = now;
         recordAudit(
-                selfActor(),
-                AuthenticationAction.AUTHENTICATION_SUCCEEDED,
-                AuthenticationDecision.SUCCESS,
-                AuthenticationMethod.PASSWORD,
-                "CREDENTIALS_ACCEPTED",
-                correlationId,
-                now
+            selfActor(),
+            AuthenticationAction.AUTHENTICATION_SUCCEEDED,
+            AuthenticationDecision.SUCCESS,
+            AuthenticationMethod.PASSWORD,
+            "CREDENTIALS_ACCEPTED",
+            correlationId,
+            now
         );
     }
 
     public void changePassword(
-            EncodedPassword newEncodedPassword,
-            AuthenticationActor actor,
-            String correlationId,
-            Instant now
+        EncodedPassword newEncodedPassword,
+        AuthenticationActor actor,
+        String correlationId,
+        Instant now
     ) {
         AuthenticationActor requiredActor = requirePresent(actor, "actor");
         requireCorrelationId(correlationId);
@@ -206,20 +206,20 @@ public class IdentityAccount {
         lockedUntil = null;
         updatedAt = now;
         recordAudit(
-                requiredActor,
-                AuthenticationAction.PASSWORD_CHANGED,
-                AuthenticationDecision.SUCCESS,
-                AuthenticationMethod.PASSWORD,
-                "PASSWORD_CHANGED",
-                correlationId,
-                now
+            requiredActor,
+            AuthenticationAction.PASSWORD_CHANGED,
+            AuthenticationDecision.SUCCESS,
+            AuthenticationMethod.PASSWORD,
+            "PASSWORD_CHANGED",
+            correlationId,
+            now
         );
     }
 
     public void enable(
-            AuthenticationActor actor,
-            String correlationId,
-            Instant now
+        AuthenticationActor actor,
+        String correlationId,
+        Instant now
     ) {
         AuthenticationActor requiredActor = requirePresent(actor, "actor");
         requireCorrelationId(correlationId);
@@ -233,13 +233,13 @@ public class IdentityAccount {
         lockedUntil = null;
         updatedAt = now;
         recordAudit(
-                requiredActor,
-                AuthenticationAction.ACCOUNT_ENABLED,
-                AuthenticationDecision.SUCCESS,
-                null,
-                "ACCOUNT_ENABLED",
-                correlationId,
-                now
+            requiredActor,
+            AuthenticationAction.ACCOUNT_ENABLED,
+            AuthenticationDecision.SUCCESS,
+            null,
+            "ACCOUNT_ENABLED",
+            correlationId,
+            now
         );
     }
 
@@ -263,21 +263,21 @@ public class IdentityAccount {
         lockedUntil = null;
         updatedAt = now;
         recordAudit(
-                requiredActor,
-                AuthenticationAction.ACCOUNT_DISABLED,
-                AuthenticationDecision.SUCCESS,
-                null,
-                requiredReasonCode,
-                correlationId,
-                now
+            requiredActor,
+            AuthenticationAction.ACCOUNT_DISABLED,
+            AuthenticationDecision.SUCCESS,
+            null,
+            requiredReasonCode,
+            correlationId,
+            now
         );
     }
 
     public void close(
-            AuthenticationActor actor,
-            String reasonCode,
-            String correlationId,
-            Instant now
+        AuthenticationActor actor,
+        String reasonCode,
+        String correlationId,
+        Instant now
     ) {
         AuthenticationActor requiredActor = requirePresent(actor, "actor");
         String requiredReasonCode = requireReasonCode(reasonCode);
@@ -292,13 +292,13 @@ public class IdentityAccount {
         lockedUntil = null;
         updatedAt = now;
         recordAudit(
-                requiredActor,
-                AuthenticationAction.ACCOUNT_CLOSED,
-                AuthenticationDecision.SUCCESS,
-                null,
-                requiredReasonCode,
-                correlationId,
-                now
+            requiredActor,
+            AuthenticationAction.ACCOUNT_CLOSED,
+            AuthenticationDecision.SUCCESS,
+            null,
+            requiredReasonCode,
+            correlationId,
+            now
         );
     }
 
@@ -370,23 +370,23 @@ public class IdentityAccount {
     }
 
     private void recordAudit(
-            AuthenticationActor actor,
-            AuthenticationAction action,
-            AuthenticationDecision decision,
-            AuthenticationMethod authenticationMethod,
-            String reasonCode,
-            String correlationId,
-            Instant occurredAt
+        AuthenticationActor actor,
+        AuthenticationAction action,
+        AuthenticationDecision decision,
+        AuthenticationMethod authenticationMethod,
+        String reasonCode,
+        String correlationId,
+        Instant occurredAt
     ) {
         pendingAuditEvents.add(AuthenticationAuditEvent.record(
-                id,
-                actor,
-                action,
-                decision,
-                authenticationMethod,
-                reasonCode,
-                correlationId,
-                occurredAt
+            id,
+            actor,
+            action,
+            decision,
+            authenticationMethod,
+            reasonCode,
+            correlationId,
+            occurredAt
         ));
     }
 

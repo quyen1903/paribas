@@ -11,10 +11,11 @@ import com.quinnbank.core.identity.application.port.PasswordService;
 import com.quinnbank.core.identity.application.port.TokenPairService;
 import com.quinnbank.core.identity.infrastructure.security.DatabaseBackedJwtTokenService;
 import com.quinnbank.core.identity.infrastructure.security.DatabaseJwkSource;
-import com.quinnbank.core.identity.infrastructure.security.ExternalRsaSigningKeyMaterialProvider;
 import com.quinnbank.core.identity.infrastructure.security.IdentityJwtClaimValidator;
 import com.quinnbank.core.identity.infrastructure.security.IdentityJwtDecoderFactory;
 import com.quinnbank.core.identity.infrastructure.security.InMemoryAuthenticationThrottle;
+import com.quinnbank.core.identity.infrastructure.security.JdkRsaSigningKeyMaterialGenerator;
+import com.quinnbank.core.identity.infrastructure.security.RsaSigningKeyMaterialGenerator;
 import com.quinnbank.core.identity.infrastructure.security.SpringPasswordService;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
@@ -23,7 +24,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
-import org.springframework.core.io.ResourceLoader;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -56,91 +56,88 @@ public class IdentitySecurityConfiguration {
 
     @Bean
     public SecurityFilterChain identityApiSecurityFilterChain(
-            HttpSecurity http,
-            JwtDecoder accessTokenDecoder
+        HttpSecurity http,
+        JwtDecoder accessTokenDecoder
     ) throws Exception {
         return http
-                .csrf(AbstractHttpConfigurer::disable)
-                .httpBasic(AbstractHttpConfigurer::disable)
-                .formLogin(AbstractHttpConfigurer::disable)
-                .logout(AbstractHttpConfigurer::disable)
-                .requestCache(AbstractHttpConfigurer::disable)
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(authorize -> authorize
-                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
-                        .requestMatchers(HttpMethod.POST, REGISTER_PATH, LOGIN_PATH, REFRESH_PATH).permitAll()
-                        .anyRequest().authenticated()
+            .csrf(AbstractHttpConfigurer::disable)
+            .httpBasic(AbstractHttpConfigurer::disable)
+            .formLogin(AbstractHttpConfigurer::disable)
+            .logout(AbstractHttpConfigurer::disable)
+            .requestCache(AbstractHttpConfigurer::disable)
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(authorize -> authorize
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                .requestMatchers(HttpMethod.POST, REGISTER_PATH, LOGIN_PATH, REFRESH_PATH).permitAll()
+                .anyRequest().authenticated()
+            )
+            .oauth2ResourceServer(oauth2 -> oauth2
+                .authenticationEntryPoint(this::writeUnauthorized)
+                .jwt(jwt -> jwt
+                        .decoder(accessTokenDecoder)
+                        .jwtAuthenticationConverter(jwtAuthenticationConverter())
                 )
-                .oauth2ResourceServer(oauth2 -> oauth2
-                        .authenticationEntryPoint(this::writeUnauthorized)
-                        .jwt(jwt -> jwt
-                                .decoder(accessTokenDecoder)
-                                .jwtAuthenticationConverter(jwtAuthenticationConverter())
-                        )
-                )
-                .exceptionHandling(exceptions -> exceptions
-                        .authenticationEntryPoint(this::writeUnauthorized)
-                        .accessDeniedHandler(this::writeForbidden)
-                )
-                .build();
+            )
+            .exceptionHandling(exceptions -> exceptions
+                .authenticationEntryPoint(this::writeUnauthorized)
+                .accessDeniedHandler(this::writeForbidden)
+            )
+            .build();
     }
 
     @Bean
     public JwtDecoder accessTokenDecoder(
-            DatabaseJwkSource jwkSource,
-            IdentityAuthenticationProperties properties,
-            IdentityAccountRepository identityAccounts,
-            AuthenticationSessionRepository sessions,
-            JwtSigningKeyRepository signingKeys,
-            Clock clock
+        DatabaseJwkSource jwkSource,
+        IdentityAuthenticationProperties properties,
+        IdentityAccountRepository identityAccounts,
+        AuthenticationSessionRepository sessions,
+        JwtSigningKeyRepository signingKeys,
+        Clock clock
     ) {
         return IdentityJwtDecoderFactory.accessTokenDecoder(
-                jwkSource,
-                properties,
-                identityAccounts,
-                sessions,
-                signingKeys,
-                clock
+            jwkSource,
+            properties,
+            identityAccounts,
+            sessions,
+            signingKeys,
+            clock
         );
     }
 
     @Bean
     public DatabaseJwkSource databaseJwkSource(
-            JwtSigningKeyRepository signingKeys,
-            ExternalRsaSigningKeyMaterialProvider signingMaterialProvider,
-            Clock clock
+        JwtSigningKeyRepository signingKeys,
+        Clock clock,
+        IdentityAuthenticationProperties properties
     ) {
-        return new DatabaseJwkSource(signingKeys, signingMaterialProvider, clock);
+        return new DatabaseJwkSource(signingKeys, clock, properties.getClockSkew());
     }
 
     @Bean
-    public ExternalRsaSigningKeyMaterialProvider rsaSigningKeyMaterialProvider(
-            IdentityAuthenticationProperties properties,
-            ResourceLoader resourceLoader
-    ) {
-        return new ExternalRsaSigningKeyMaterialProvider(properties, resourceLoader);
+    public RsaSigningKeyMaterialGenerator rsaSigningKeyMaterialGenerator() {
+        return new JdkRsaSigningKeyMaterialGenerator();
     }
 
     @Bean
     public TokenPairService tokenPairService(
-            JwtSigningKeyRepository signingKeys,
-            ExternalRsaSigningKeyMaterialProvider signingMaterialProvider,
-            DatabaseJwkSource jwkSource,
-            IdentityAuthenticationProperties properties,
-            Clock clock
+        JwtSigningKeyRepository signingKeys,
+        RsaSigningKeyMaterialGenerator signingMaterialGenerator,
+        DatabaseJwkSource jwkSource,
+        IdentityAuthenticationProperties properties,
+        Clock clock
     ) {
         validateTokenLifetimes(properties);
         JwtDecoder refreshDecoder = IdentityJwtDecoderFactory.refreshTokenDecoder(
-                jwkSource,
-                properties,
-                signingKeys,
-                clock
+            jwkSource,
+            properties,
+            signingKeys,
+            clock
         );
         return new DatabaseBackedJwtTokenService(
-                signingKeys,
-                signingMaterialProvider,
-                properties,
-                refreshDecoder
+            signingKeys,
+            signingMaterialGenerator,
+            properties,
+            refreshDecoder
         );
     }
 
@@ -161,9 +158,9 @@ public class IdentitySecurityConfiguration {
     @Bean
     public AuthenticationPolicy authenticationPolicy(IdentityAuthenticationProperties properties) {
         return new AuthenticationPolicy(
-                properties.getLoginLockThreshold(),
-                properties.getLoginLockDuration(),
-                properties.getRefreshTokenTtl()
+            properties.getLoginLockThreshold(),
+            properties.getLoginLockDuration(),
+            properties.getRefreshTokenTtl()
         );
     }
 
@@ -175,10 +172,10 @@ public class IdentitySecurityConfiguration {
     @Bean
     public AuthenticationThrottle authenticationThrottle(IdentityAuthenticationProperties properties) {
         return new InMemoryAuthenticationThrottle(
-                properties.getRegistrationLimitPerMinute(),
-                properties.getLoginSourceLimitPerMinute(),
-                properties.getLoginIdentifierLimitPerMinute(),
-                properties.getRefreshLimitPerMinute()
+            properties.getRegistrationLimitPerMinute(),
+            properties.getLoginSourceLimitPerMinute(),
+            properties.getLoginIdentifierLimitPerMinute(),
+            properties.getRefreshLimitPerMinute()
         );
     }
 
@@ -199,9 +196,9 @@ public class IdentitySecurityConfiguration {
     }
 
     private void writeUnauthorized(
-            HttpServletRequest request,
-            HttpServletResponse response,
-            Exception exception
+        HttpServletRequest request,
+        HttpServletResponse response,
+        Exception exception
     ) throws IOException {
         writeSecurityError(response, request, HttpServletResponse.SC_UNAUTHORIZED,
                 "AUTHENTICATION_REQUIRED", "A valid access token is required.");
@@ -209,20 +206,20 @@ public class IdentitySecurityConfiguration {
     }
 
     private void writeForbidden(
-            HttpServletRequest request,
-            HttpServletResponse response,
-            Exception exception
+        HttpServletRequest request,
+        HttpServletResponse response,
+        Exception exception
     ) throws IOException {
         writeSecurityError(response, request, HttpServletResponse.SC_FORBIDDEN,
                 "ACCESS_DENIED", "The authenticated identity is not allowed to perform this action.");
     }
 
     private static void writeSecurityError(
-            HttpServletResponse response,
-            HttpServletRequest request,
-            int status,
-            String code,
-            String message
+        HttpServletResponse response,
+        HttpServletRequest request,
+        int status,
+        String code,
+        String message
     ) throws IOException {
         response.setStatus(status);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
@@ -245,7 +242,7 @@ public class IdentitySecurityConfiguration {
         if (refreshTtl == null || refreshTtl.compareTo(accessTtl) <= 0
                 || refreshTtl.compareTo(Duration.ofDays(90)) > 0) {
             throw new IllegalArgumentException(
-                    "refreshTokenTtl must exceed accessTokenTtl and be at most 90 days."
+                "refreshTokenTtl must exceed accessTokenTtl and be at most 90 days."
             );
         }
     }

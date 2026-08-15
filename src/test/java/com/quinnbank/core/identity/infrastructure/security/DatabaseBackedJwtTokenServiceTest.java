@@ -25,27 +25,34 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtException;
 
+import javax.security.auth.DestroyFailedException;
+import java.math.BigInteger;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.security.PrivateKey;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.security.spec.AlgorithmParameterSpec;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Deque;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -56,45 +63,43 @@ class DatabaseBackedJwtTokenServiceTest {
     private static final Instant NOW = Instant.parse("2026-08-04T12:00:00.987654321Z");
     private static final Instant JWT_NOW = AuthenticationTimestampPolicy.jwtCompatible(NOW);
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
-    private static final String KEY_ID = "synthetic-rsa-key-2026-08";
+    private static final String FIRST_KEY_ID = "synthetic-ephemeral-rsa-key-001";
+    private static final String SECOND_KEY_ID = "synthetic-ephemeral-rsa-key-002";
+    private static final String FAILED_ISSUANCE_KEY_ID = "synthetic-ephemeral-rsa-key-failed";
     private static final String ISSUER = "https://identity.example.invalid";
     private static final String ACCESS_AUDIENCE = "synthetic-core-api";
     private static final String REFRESH_AUDIENCE = "synthetic-core-refresh";
     private static final String ENCODED_PASSWORD = "$2b$12$" + "b".repeat(53);
 
-    private static RsaSigningKeyMaterial signingMaterial;
+    private static TestSigningMaterial firstSigningMaterial;
+    private static TestSigningMaterial secondSigningMaterial;
+    private static TestSigningMaterial failedIssuanceSigningMaterial;
     private static RSAPublicKey attackerPublicKey;
 
     @BeforeAll
     static void generateEphemeralSigningMaterial() throws Exception {
         KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
         generator.initialize(3_072);
-        KeyPair keyPair = generator.generateKeyPair();
-        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
-        RSAPrivateKey privateKey = (RSAPrivateKey) keyPair.getPrivate();
-        String fingerprint = HexFormat.of().formatHex(
-                MessageDigest.getInstance("SHA-256").digest(publicKey.getEncoded())
-        );
-        signingMaterial = new RsaSigningKeyMaterial(KEY_ID, publicKey, privateKey, fingerprint);
+        firstSigningMaterial = testSigningMaterial(generator, FIRST_KEY_ID);
+        secondSigningMaterial = testSigningMaterial(generator, SECOND_KEY_ID);
+        failedIssuanceSigningMaterial = testSigningMaterial(generator, FAILED_ISSUANCE_KEY_ID);
 
         KeyPair attackerKeyPair = generator.generateKeyPair();
         attackerPublicKey = (RSAPublicKey) attackerKeyPair.getPublic();
     }
 
     @Test
-    void rejectsDatabasePublicMaterialThatDoesNotMatchItsTrustedFingerprint() {
+    void rejectsDatabasePublicMaterialWhoseStoredFingerprintDoesNotMatch() {
         JwtSigningKeyRepository signingKeys = mock(JwtSigningKeyRepository.class);
-        ExternalRsaSigningKeyMaterialProvider keyProvider = mock(ExternalRsaSigningKeyMaterialProvider.class);
         JwtSigningKey substitutedKey = mock(JwtSigningKey.class);
-        when(signingKeys.findByKeyId(KEY_ID)).thenReturn(Optional.of(substitutedKey));
+        when(signingKeys.findByKeyId(FIRST_KEY_ID)).thenReturn(Optional.of(substitutedKey));
         when(substitutedKey.getAlgorithm()).thenReturn(JwtSigningAlgorithm.RS256);
         when(substitutedKey.canVerify(NOW)).thenReturn(true);
         when(substitutedKey.getPublicKeyDer()).thenReturn(attackerPublicKey.getEncoded());
-        when(substitutedKey.getPublicKeySha256()).thenReturn(signingMaterial.publicKeySha256());
-        when(keyProvider.trustedPublicKeyFingerprints()).thenReturn(Set.of(signingMaterial.publicKeySha256()));
-        DatabaseJwkSource source = new DatabaseJwkSource(signingKeys, keyProvider, CLOCK);
+        when(substitutedKey.getPublicKeySha256()).thenReturn(firstSigningMaterial.material().publicKeySha256());
+        DatabaseJwkSource source = new DatabaseJwkSource(signingKeys, CLOCK, Duration.ZERO);
         JWKSelector selector = new JWKSelector(new JWKMatcher.Builder()
-                .keyID(KEY_ID)
+                .keyID(FIRST_KEY_ID)
                 .algorithm(JWSAlgorithm.RS256)
                 .build());
 
@@ -102,12 +107,74 @@ class DatabaseBackedJwtTokenServiceTest {
     }
 
     @Test
-    void issuesSignedTypedTokenPairAndUsesOnlyStoredPublicMaterialForValidation() {
+    void keyLookupHonorsConfiguredClockSkewWhenVerifierClockTrailsIssuer() throws Exception {
+        JwtSigningKeyRepository signingKeys = mock(JwtSigningKeyRepository.class);
+        JwtSigningKey signingKey = mock(JwtSigningKey.class);
+        String fingerprint = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(attackerPublicKey.getEncoded())
+        );
+        when(signingKeys.findByKeyId(FIRST_KEY_ID)).thenReturn(Optional.of(signingKey));
+        when(signingKey.getKeyId()).thenReturn(FIRST_KEY_ID);
+        when(signingKey.getAlgorithm()).thenReturn(JwtSigningAlgorithm.RS256);
+        when(signingKey.canVerify(NOW.plusSeconds(15))).thenReturn(true);
+        when(signingKey.getPublicKeyDer()).thenReturn(attackerPublicKey.getEncoded());
+        when(signingKey.getPublicKeySha256()).thenReturn(fingerprint);
+        DatabaseJwkSource source = new DatabaseJwkSource(
+                signingKeys,
+                Clock.fixed(NOW.minusSeconds(15), ZoneOffset.UTC),
+                Duration.ofSeconds(30)
+        );
+        JWKSelector selector = new JWKSelector(new JWKMatcher.Builder()
+                .keyID(FIRST_KEY_ID)
+                .algorithm(JWSAlgorithm.RS256)
+                .build());
+
+        assertFalse(source.get(selector, null).isEmpty());
+    }
+
+    @Test
+    void doesNotPersistPublicKeyWhenBothTokensWereNotSuccessfullyEncoded() {
+        IdentityAuthenticationProperties properties = properties();
+        properties.setRefreshAudience(" ");
+        InMemorySigningKeyRepository signingKeys = new InMemorySigningKeyRepository();
+        QueueSigningKeyMaterialGenerator generator = new QueueSigningKeyMaterialGenerator(
+                failedIssuanceSigningMaterial.material()
+        );
+        IdentityAccount identity = activeIdentity();
+        AuthenticationSession session = AuthenticationSession.open(
+                UUID.fromString("10000000-0000-0000-0000-000000000011"),
+                identity.getId(),
+                UUID.fromString("20000000-0000-0000-0000-000000000012"),
+                NOW.plus(Duration.ofHours(1)),
+                NOW.minusSeconds(1)
+        );
+        DatabaseBackedJwtTokenService tokenService = new DatabaseBackedJwtTokenService(
+                signingKeys,
+                generator,
+                properties,
+                mock(JwtDecoder.class)
+        );
+
+        assertThrows(IllegalArgumentException.class, () -> tokenService.issuePair(identity, session, NOW));
+
+        assertAll(
+                () -> assertTrue(signingKeys.stored.isEmpty()),
+                () -> assertEquals(1, failedIssuanceSigningMaterial.privateKey().destructionAttempts()),
+                () -> assertThrows(
+                        IllegalStateException.class,
+                        failedIssuanceSigningMaterial.material()::privateKey
+                )
+        );
+    }
+
+    @Test
+    void issuesEachTokenPairWithDistinctEphemeralMaterialAndRetainsPublicVerification() {
         IdentityAuthenticationProperties properties = properties();
         InMemorySigningKeyRepository signingKeys = new InMemorySigningKeyRepository();
-        ExternalRsaSigningKeyMaterialProvider keyProvider = mock(ExternalRsaSigningKeyMaterialProvider.class);
-        when(keyProvider.currentSigningKey()).thenReturn(signingMaterial);
-        when(keyProvider.trustedPublicKeyFingerprints()).thenReturn(Set.of(signingMaterial.publicKeySha256()));
+        QueueSigningKeyMaterialGenerator generator = new QueueSigningKeyMaterialGenerator(
+                firstSigningMaterial.material(),
+                secondSigningMaterial.material()
+        );
 
         IdentityAccount identity = activeIdentity();
         AuthenticationSession session = AuthenticationSession.open(
@@ -119,7 +186,7 @@ class DatabaseBackedJwtTokenServiceTest {
         );
         SingleIdentityRepository identities = new SingleIdentityRepository(identity);
         SingleSessionRepository sessions = new SingleSessionRepository(session);
-        DatabaseJwkSource jwkSource = new DatabaseJwkSource(signingKeys, keyProvider, CLOCK);
+        DatabaseJwkSource jwkSource = new DatabaseJwkSource(signingKeys, CLOCK, Duration.ZERO);
         JwtDecoder refreshDecoder = IdentityJwtDecoderFactory.refreshTokenDecoder(
                 jwkSource,
                 properties,
@@ -128,12 +195,13 @@ class DatabaseBackedJwtTokenServiceTest {
         );
         DatabaseBackedJwtTokenService tokenService = new DatabaseBackedJwtTokenService(
                 signingKeys,
-                keyProvider,
+                generator,
                 properties,
                 refreshDecoder
         );
 
-        IssuedTokenPair pair = tokenService.issuePair(identity, session, NOW);
+        IssuedTokenPair firstPair = tokenService.issuePair(identity, session, NOW);
+        IssuedTokenPair secondPair = tokenService.issuePair(identity, session, NOW);
         JwtDecoder accessDecoder = IdentityJwtDecoderFactory.accessTokenDecoder(
                 jwkSource,
                 properties,
@@ -142,56 +210,82 @@ class DatabaseBackedJwtTokenServiceTest {
                 signingKeys,
                 CLOCK
         );
-        Jwt access = accessDecoder.decode(pair.accessToken());
-        VerifiedRefreshToken refresh = tokenService.verifyRefreshToken(pair.refreshToken());
-        JwtSigningKey storedKey = signingKeys.stored;
+        Jwt firstAccess = accessDecoder.decode(firstPair.accessToken());
+        Jwt firstRefresh = refreshDecoder.decode(firstPair.refreshToken());
+        Jwt secondAccess = accessDecoder.decode(secondPair.accessToken());
+        Jwt secondRefresh = refreshDecoder.decode(secondPair.refreshToken());
+        VerifiedRefreshToken verifiedFirstRefresh = tokenService.verifyRefreshToken(firstPair.refreshToken());
+        JwtSigningKey firstStoredKey = signingKeys.findByKeyId(FIRST_KEY_ID).orElseThrow();
+        JwtSigningKey secondStoredKey = signingKeys.findByKeyId(SECOND_KEY_ID).orElseThrow();
 
         assertAll(
-                () -> assertEquals(identity.getId().toString(), access.getSubject()),
-                () -> assertEquals(ISSUER, access.getIssuer().toString()),
-                () -> assertEquals(java.util.List.of(ACCESS_AUDIENCE), access.getAudience()),
-                () -> assertEquals(JWT_NOW, access.getIssuedAt()),
-                () -> assertEquals(JWT_NOW, access.getNotBefore()),
-                () -> assertEquals(JWT_NOW.plus(Duration.ofMinutes(5)), access.getExpiresAt()),
-                () -> assertEquals("access", access.getClaimAsString(IdentityJwtClaimValidator.TOKEN_USE_CLAIM)),
+                () -> assertEquals(identity.getId().toString(), firstAccess.getSubject()),
+                () -> assertEquals(ISSUER, firstAccess.getIssuer().toString()),
+                () -> assertEquals(java.util.List.of(ACCESS_AUDIENCE), firstAccess.getAudience()),
+                () -> assertEquals(JWT_NOW, firstAccess.getIssuedAt()),
+                () -> assertEquals(JWT_NOW, firstAccess.getNotBefore()),
+                () -> assertEquals(JWT_NOW.plus(Duration.ofMinutes(5)), firstAccess.getExpiresAt()),
+                () -> assertEquals(
+                        "access",
+                        firstAccess.getClaimAsString(IdentityJwtClaimValidator.TOKEN_USE_CLAIM)
+                ),
                 () -> assertEquals(
                         IdentityActorType.RETAIL_CUSTOMER.name(),
-                        access.getClaimAsString(IdentityJwtClaimValidator.ACTOR_TYPE_CLAIM)
+                        firstAccess.getClaimAsString(IdentityJwtClaimValidator.ACTOR_TYPE_CLAIM)
                 ),
                 () -> assertEquals(
                         session.getId().toString(),
-                        access.getClaimAsString(IdentityJwtClaimValidator.SESSION_ID_CLAIM)
+                        firstAccess.getClaimAsString(IdentityJwtClaimValidator.SESSION_ID_CLAIM)
                 ),
-                () -> assertEquals("RS256", access.getHeaders().get("alg")),
-                () -> assertEquals("at+jwt", access.getHeaders().get("typ")),
-                () -> assertEquals(KEY_ID, access.getHeaders().get("kid")),
-                () -> assertEquals(identity.getId(), refresh.identityId()),
-                () -> assertEquals(session.getId(), refresh.sessionId()),
-                () -> assertEquals(session.getCurrentRefreshTokenId(), refresh.tokenId()),
+                () -> assertEquals("RS256", firstAccess.getHeaders().get("alg")),
+                () -> assertEquals("at+jwt", firstAccess.getHeaders().get("typ")),
+                () -> assertEquals(FIRST_KEY_ID, firstAccess.getHeaders().get("kid")),
+                () -> assertEquals(firstAccess.getHeaders().get("kid"), firstRefresh.getHeaders().get("kid")),
+                () -> assertEquals(secondAccess.getHeaders().get("kid"), secondRefresh.getHeaders().get("kid")),
+                () -> assertNotEquals(firstAccess.getHeaders().get("kid"), secondAccess.getHeaders().get("kid")),
+                () -> assertEquals(identity.getId(), verifiedFirstRefresh.identityId()),
+                () -> assertEquals(session.getId(), verifiedFirstRefresh.sessionId()),
+                () -> assertEquals(session.getCurrentRefreshTokenId(), verifiedFirstRefresh.tokenId()),
                 () -> assertEquals(
                         AuthenticationTimestampPolicy.jwtCompatible(session.getExpiresAt()),
-                        refresh.expiresAt()
+                        verifiedFirstRefresh.expiresAt()
                 ),
-                () -> assertNotNull(storedKey),
-                () -> assertEquals(JwtSigningKeyStatus.ACTIVE, storedKey.getStatus()),
-                () -> assertArrayEquals(signingMaterial.publicKey().getEncoded(), storedKey.getPublicKeyDer()),
+                () -> assertNotNull(firstStoredKey),
+                () -> assertNotNull(secondStoredKey),
+                () -> assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, firstStoredKey.getStatus()),
+                () -> assertEquals(JwtSigningKeyStatus.VERIFY_ONLY, secondStoredKey.getStatus()),
+                () -> assertArrayEquals(
+                        firstSigningMaterial.material().publicKey().getEncoded(),
+                        firstStoredKey.getPublicKeyDer()
+                ),
+                () -> assertArrayEquals(
+                        secondSigningMaterial.material().publicKey().getEncoded(),
+                        secondStoredKey.getPublicKeyDer()
+                ),
+                () -> assertFalse(Arrays.equals(firstStoredKey.getPublicKeyDer(), secondStoredKey.getPublicKeyDer())),
                 () -> assertFalse(Arrays.equals(
-                        signingMaterial.privateKey().getEncoded(),
-                        storedKey.getPublicKeyDer()
+                        firstSigningMaterial.privateKeyDer(),
+                        firstStoredKey.getPublicKeyDer()
                 )),
                 () -> assertTrue(Arrays.stream(JwtSigningKey.class.getDeclaredFields())
                         .noneMatch(field -> PrivateKey.class.isAssignableFrom(field.getType()))),
-                () -> assertFalse(signingMaterial.toString().contains(privateKeyBase64())),
-                () -> assertFalse(storedKey.toString().contains(privateKeyBase64())),
-                () -> assertFalse(session.toString().contains(pair.accessToken())),
-                () -> assertFalse(session.toString().contains(pair.refreshToken())),
-                () -> assertFalse(pair.toString().contains(pair.accessToken())),
-                () -> assertFalse(pair.toString().contains(pair.refreshToken()))
+                () -> assertEquals(1, firstSigningMaterial.privateKey().destructionAttempts()),
+                () -> assertEquals(1, secondSigningMaterial.privateKey().destructionAttempts()),
+                () -> assertFalse(firstSigningMaterial.material().toString()
+                        .contains(firstSigningMaterial.privateKeyBase64())),
+                () -> assertFalse(firstStoredKey.toString().contains(firstSigningMaterial.privateKeyBase64())),
+                () -> assertFalse(session.toString().contains(firstPair.accessToken())),
+                () -> assertFalse(session.toString().contains(firstPair.refreshToken())),
+                () -> assertFalse(firstPair.toString().contains(firstPair.accessToken())),
+                () -> assertFalse(firstPair.toString().contains(firstPair.refreshToken()))
         );
 
-        assertThrows(JwtException.class, () -> accessDecoder.decode(pair.refreshToken()));
-        assertThrows(InvalidRefreshTokenException.class, () -> tokenService.verifyRefreshToken(pair.accessToken()));
-        assertThrows(JwtException.class, () -> accessDecoder.decode(tamperSignature(pair.accessToken())));
+        assertThrows(JwtException.class, () -> accessDecoder.decode(firstPair.refreshToken()));
+        assertThrows(
+                InvalidRefreshTokenException.class,
+                () -> tokenService.verifyRefreshToken(firstPair.accessToken())
+        );
+        assertThrows(JwtException.class, () -> accessDecoder.decode(tamperSignature(firstPair.accessToken())));
 
         IdentityAuthenticationProperties sharedAudienceProperties = properties();
         sharedAudienceProperties.setAccessAudience(REFRESH_AUDIENCE);
@@ -203,10 +297,10 @@ class DatabaseBackedJwtTokenServiceTest {
                 signingKeys,
                 CLOCK
         );
-        assertThrows(JwtException.class, () -> typeCheckingAccessDecoder.decode(pair.refreshToken()));
+        assertThrows(JwtException.class, () -> typeCheckingAccessDecoder.decode(firstPair.refreshToken()));
 
         session.revoke("SYNTHETIC_TEST_REVOCATION", NOW.plusSeconds(1));
-        assertThrows(JwtException.class, () -> accessDecoder.decode(pair.accessToken()));
+        assertThrows(JwtException.class, () -> accessDecoder.decode(firstPair.accessToken()));
     }
 
     private static IdentityAuthenticationProperties properties() {
@@ -241,8 +335,25 @@ class DatabaseBackedJwtTokenServiceTest {
         return identity;
     }
 
-    private static String privateKeyBase64() {
-        return Base64.getEncoder().encodeToString(signingMaterial.privateKey().getEncoded());
+    private static TestSigningMaterial testSigningMaterial(
+            KeyPairGenerator generator,
+            String keyId
+    ) throws Exception {
+        KeyPair keyPair = generator.generateKeyPair();
+        RSAPublicKey publicKey = (RSAPublicKey) keyPair.getPublic();
+        DestructionTrackingRsaPrivateKey privateKey = new DestructionTrackingRsaPrivateKey(
+                (RSAPrivateKey) keyPair.getPrivate()
+        );
+        String fingerprint = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(publicKey.getEncoded())
+        );
+        byte[] privateKeyDer = privateKey.getEncoded().clone();
+        return new TestSigningMaterial(
+                new RsaSigningKeyMaterial(keyId, publicKey, privateKey, fingerprint),
+                privateKey,
+                privateKeyDer,
+                Base64.getEncoder().encodeToString(privateKeyDer)
+        );
     }
 
     private static String tamperSignature(String compactToken) {
@@ -252,24 +363,92 @@ class DatabaseBackedJwtTokenServiceTest {
     }
 
     private static final class InMemorySigningKeyRepository implements JwtSigningKeyRepository {
-        private JwtSigningKey stored;
+        private final Map<String, JwtSigningKey> stored = new LinkedHashMap<>();
 
         @Override
         public Optional<JwtSigningKey> findByKeyId(String keyId) {
-            return stored != null && stored.getKeyId().equals(keyId) ? Optional.of(stored) : Optional.empty();
-        }
-
-        @Override
-        public Optional<JwtSigningKey> findActiveForUpdate() {
-            return stored != null && stored.getStatus() == JwtSigningKeyStatus.ACTIVE
-                    ? Optional.of(stored)
-                    : Optional.empty();
+            return Optional.ofNullable(stored.get(keyId));
         }
 
         @Override
         public JwtSigningKey save(JwtSigningKey signingKey) {
-            stored = signingKey;
+            stored.put(signingKey.getKeyId(), signingKey);
             return signingKey;
+        }
+    }
+
+    private static final class QueueSigningKeyMaterialGenerator implements RsaSigningKeyMaterialGenerator {
+        private final Deque<RsaSigningKeyMaterial> materials;
+
+        private QueueSigningKeyMaterialGenerator(RsaSigningKeyMaterial... materials) {
+            this.materials = new ArrayDeque<>(java.util.List.of(materials));
+        }
+
+        @Override
+        public RsaSigningKeyMaterial generate() {
+            return materials.removeFirst();
+        }
+    }
+
+    private record TestSigningMaterial(
+            RsaSigningKeyMaterial material,
+            DestructionTrackingRsaPrivateKey privateKey,
+            byte[] privateKeyDer,
+            String privateKeyBase64
+    ) {
+    }
+
+    private static final class DestructionTrackingRsaPrivateKey implements RSAPrivateKey {
+        private final RSAPrivateKey delegate;
+        private int destructionAttempts;
+
+        private DestructionTrackingRsaPrivateKey(RSAPrivateKey delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public BigInteger getPrivateExponent() {
+            return delegate.getPrivateExponent();
+        }
+
+        @Override
+        public BigInteger getModulus() {
+            return delegate.getModulus();
+        }
+
+        @Override
+        public AlgorithmParameterSpec getParams() {
+            return delegate.getParams();
+        }
+
+        @Override
+        public String getAlgorithm() {
+            return delegate.getAlgorithm();
+        }
+
+        @Override
+        public String getFormat() {
+            return delegate.getFormat();
+        }
+
+        @Override
+        public byte[] getEncoded() {
+            return delegate.getEncoded();
+        }
+
+        @Override
+        public void destroy() throws DestroyFailedException {
+            destructionAttempts++;
+            delegate.destroy();
+        }
+
+        @Override
+        public boolean isDestroyed() {
+            return delegate.isDestroyed();
+        }
+
+        private int destructionAttempts() {
+            return destructionAttempts;
         }
     }
 

@@ -23,10 +23,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.TestComponent;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.AnnotatedBeanDefinitionReader;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.core.env.MapPropertySource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -54,7 +54,6 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -128,7 +127,7 @@ class IdentitySecurityConfigurationTest {
                 KEY_ID,
                 publicKey.getEncoded(),
                 publicKeyFingerprint,
-                NOW.minusSeconds(10)
+                NOW
         );
         when(identityAccounts.findById(IDENTITY_ID)).thenReturn(Optional.of(identity));
         when(sessions.findById(SESSION_ID)).thenReturn(Optional.of(session));
@@ -136,10 +135,6 @@ class IdentitySecurityConfigurationTest {
 
         applicationContext = new GenericWebApplicationContext();
         applicationContext.setServletContext(new MockServletContext());
-        applicationContext.getEnvironment().getPropertySources().addFirst(new MapPropertySource(
-                "identity-security-test",
-                Map.of("quinnbank.identity.authentication.trusted-public-key-sha256", publicKeyFingerprint)
-        ));
         applicationContext.registerBean("testClock", Clock.class, () -> CLOCK);
         applicationContext.registerBean("identityAccounts", IdentityAccountRepository.class, () -> identityAccounts);
         applicationContext.registerBean(
@@ -340,7 +335,7 @@ class IdentitySecurityConfigurationTest {
         return "Bearer " + token;
     }
 
-    @Configuration(proxyBeanMethods = false)
+    @TestConfiguration(proxyBeanMethods = false)
     @EnableWebMvc
     @EnableWebSecurity
     static class TestWebConfiguration {
@@ -363,6 +358,7 @@ class IdentitySecurityConfigurationTest {
         }
     }
 
+    @TestComponent
     @Controller
     static class SecurityTestController {
         @GetMapping(value = "/api/v1/security-test", produces = MediaType.TEXT_PLAIN_VALUE)

@@ -40,27 +40,27 @@ public class DatabaseBackedJwtTokenService implements TokenPairService {
     private static final int MAX_COMPACT_TOKEN_LENGTH = 4_096;
 
     private final JwtSigningKeyRepository signingKeys;
-    private final ExternalRsaSigningKeyMaterialProvider signingMaterialProvider;
+    private final RsaSigningKeyMaterialGenerator signingMaterialGenerator;
     private final IdentityAuthenticationProperties properties;
     private final JwtDecoder refreshTokenDecoder;
 
     public DatabaseBackedJwtTokenService(
-            JwtSigningKeyRepository signingKeys,
-            ExternalRsaSigningKeyMaterialProvider signingMaterialProvider,
-            IdentityAuthenticationProperties properties,
-            JwtDecoder refreshTokenDecoder
+        JwtSigningKeyRepository signingKeys,
+        RsaSigningKeyMaterialGenerator signingMaterialGenerator,
+        IdentityAuthenticationProperties properties,
+        JwtDecoder refreshTokenDecoder
     ) {
         this.signingKeys = signingKeys;
-        this.signingMaterialProvider = signingMaterialProvider;
+        this.signingMaterialGenerator = signingMaterialGenerator;
         this.properties = properties;
         this.refreshTokenDecoder = refreshTokenDecoder;
     }
 
     @Override
     public IssuedTokenPair issuePair(
-            IdentityAccount identityAccount,
-            AuthenticationSession authenticationSession,
-            Instant now
+        IdentityAccount identityAccount,
+        AuthenticationSession authenticationSession,
+        Instant now
     ) {
         requireIssueState(identityAccount, authenticationSession, now);
         Instant issuedAt = AuthenticationTimestampPolicy.jwtCompatible(now);
@@ -70,35 +70,37 @@ public class DatabaseBackedJwtTokenService implements TokenPairService {
         if (!sessionExpiresAt.isAfter(issuedAt)) {
             throw new IllegalStateException("The authentication session has no JWT-compatible lifetime remaining.");
         }
-        RsaSigningKeyMaterial material = signingMaterialProvider.currentSigningKey();
-        ensurePublicKeyRegistered(material, issuedAt);
-
         Instant accessExpiresAt = earlierOf(
-                issuedAt.plus(requirePositive(properties.getAccessTokenTtl(), "accessTokenTtl")),
-                sessionExpiresAt
+            issuedAt.plus(requirePositive(properties.getAccessTokenTtl(), "accessTokenTtl")),
+            sessionExpiresAt
         );
         Instant refreshExpiresAt = sessionExpiresAt;
-        JwtEncoder encoder = signingEncoder(material);
+        RsaSigningKeyMaterial material = signingMaterialGenerator.generate();
+        if (material == null) {
+            throw new SigningKeyUnavailableException();
+        }
 
-        String accessToken = encode(
+        try (material) {
+            JwtEncoder encoder = signingEncoder(material);
+            String accessToken = encode(
                 encoder,
                 material.keyId(),
                 ACCESS_HEADER_TYPE,
                 claims(
-                        identityAccount,
-                        authenticationSession,
-                        UUID.randomUUID(),
-                        IdentityJwtClaimValidator.ACCESS_TOKEN_USE,
-                        requiredText(properties.getAccessAudience(), "accessAudience"),
-                        issuedAt,
-                        accessExpiresAt
+                    identityAccount,
+                    authenticationSession,
+                    UUID.randomUUID(),
+                    IdentityJwtClaimValidator.ACCESS_TOKEN_USE,
+                    requiredText(properties.getAccessAudience(), "accessAudience"),
+                    issuedAt,
+                    accessExpiresAt
                 )
-        );
-        String refreshToken = encode(
-                encoder,
-                material.keyId(),
-                REFRESH_HEADER_TYPE,
-                claims(
+            );
+            String refreshToken = encode(
+                    encoder,
+                    material.keyId(),
+                    REFRESH_HEADER_TYPE,
+                    claims(
                         identityAccount,
                         authenticationSession,
                         authenticationSession.getCurrentRefreshTokenId(),
@@ -106,16 +108,24 @@ public class DatabaseBackedJwtTokenService implements TokenPairService {
                         requiredText(properties.getRefreshAudience(), "refreshAudience"),
                         issuedAt,
                         refreshExpiresAt
-                )
-        );
+                    )
+            );
 
-        return new IssuedTokenPair(
+            signingKeys.save(JwtSigningKey.register(
+                material.keyId(),
+                material.publicKey().getEncoded(),
+                material.publicKeySha256(),
+                issuedAt
+            ));
+
+            return new IssuedTokenPair(
                 identityAccount.getId(),
                 accessToken,
                 accessExpiresAt,
                 refreshToken,
                 refreshExpiresAt
-        );
+            );
+        }
     }
 
     @Override
@@ -129,78 +139,42 @@ public class DatabaseBackedJwtTokenService implements TokenPairService {
         try {
             Jwt jwt = refreshTokenDecoder.decode(refreshToken);
             return new VerifiedRefreshToken(
-                    UUID.fromString(jwt.getSubject()),
-                    IdentityActorType.valueOf(
-                            jwt.getClaimAsString(IdentityJwtClaimValidator.ACTOR_TYPE_CLAIM)
-                    ),
-                    UUID.fromString(jwt.getClaimAsString(IdentityJwtClaimValidator.SESSION_ID_CLAIM)),
-                    UUID.fromString(jwt.getId()),
-                    jwt.getIssuedAt(),
-                    jwt.getExpiresAt()
+                UUID.fromString(jwt.getSubject()),
+                IdentityActorType.valueOf(
+                        jwt.getClaimAsString(IdentityJwtClaimValidator.ACTOR_TYPE_CLAIM)
+                ),
+                UUID.fromString(jwt.getClaimAsString(IdentityJwtClaimValidator.SESSION_ID_CLAIM)),
+                UUID.fromString(jwt.getId()),
+                jwt.getIssuedAt(),
+                jwt.getExpiresAt()
             );
         } catch (JwtException | IllegalArgumentException | NullPointerException exception) {
             throw new InvalidRefreshTokenException();
         }
     }
 
-    private void ensurePublicKeyRegistered(RsaSigningKeyMaterial material, Instant now) {
-        JwtSigningKey signingKey = signingKeys.findByKeyId(material.keyId()).orElse(null);
-        if (signingKey != null) {
-            requireCurrentSigningMaterial(signingKey, material, now);
-            return;
-        }
-
-        JwtSigningKey activeKey = signingKeys.findActiveForUpdate().orElse(null);
-        signingKey = signingKeys.findByKeyId(material.keyId()).orElse(null);
-        if (signingKey != null) {
-            requireCurrentSigningMaterial(signingKey, material, now);
-            return;
-        }
-        if (activeKey != null && !activeKey.getKeyId().equals(material.keyId())) {
-            activeKey.restrictToVerification(now);
-            signingKeys.save(activeKey);
-        }
-
-        signingKeys.save(JwtSigningKey.register(
-                material.keyId(),
-                material.publicKey().getEncoded(),
-                material.publicKeySha256(),
-                now
-        ));
-    }
-
-    private static void requireCurrentSigningMaterial(
-            JwtSigningKey signingKey,
-            RsaSigningKeyMaterial material,
-            Instant now
-    ) {
-        if (!signingKey.matchesMaterial(material.publicKey().getEncoded(), material.publicKeySha256())
-                || !signingKey.canSign(now)) {
-            throw new SigningKeyUnavailableException();
-        }
-    }
-
     private JwtClaimsSet claims(
-            IdentityAccount identity,
-            AuthenticationSession session,
-            UUID tokenId,
-            String tokenUse,
-            String audience,
-            Instant issuedAt,
-            Instant expiresAt
+        IdentityAccount identity,
+        AuthenticationSession session,
+        UUID tokenId,
+        String tokenUse,
+        String audience,
+        Instant issuedAt,
+        Instant expiresAt
     ) {
-        return JwtClaimsSet.builder()
-                .issuer(requiredText(properties.getIssuer(), "issuer"))
-                .subject(identity.getId().toString())
-                .audience(List.of(audience))
-                .issuedAt(issuedAt)
-                .notBefore(issuedAt)
-                .expiresAt(expiresAt)
-                .id(tokenId.toString())
-                .claim(IdentityJwtClaimValidator.ACTOR_TYPE_CLAIM, identity.getActorType().name())
-                .claim(IdentityJwtClaimValidator.SESSION_ID_CLAIM, session.getId().toString())
-                .claim(IdentityJwtClaimValidator.TOKEN_USE_CLAIM, tokenUse)
-                .build();
+        return JwtClaimsSet
+        .builder()
+        .issuer(requiredText(properties.getIssuer(), "issuer"))
+        .subject(identity.getId().toString())
+        .audience(List.of(audience))
+        .issuedAt(issuedAt)
+        .notBefore(issuedAt)
+        .expiresAt(expiresAt)
+        .id(tokenId.toString())
+        .claim(IdentityJwtClaimValidator.ACTOR_TYPE_CLAIM, identity.getActorType().name())
+        .claim(IdentityJwtClaimValidator.SESSION_ID_CLAIM, session.getId().toString())
+        .claim(IdentityJwtClaimValidator.TOKEN_USE_CLAIM, tokenUse)
+        .build();
     }
 
     private static String encode(
@@ -211,9 +185,9 @@ public class DatabaseBackedJwtTokenService implements TokenPairService {
     ) {
         try {
             JwsHeader header = JwsHeader.with(SignatureAlgorithm.RS256)
-                    .keyId(keyId)
-                    .type(headerType)
-                    .build();
+                .keyId(keyId)
+                .type(headerType)
+                .build();
             return encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
         } catch (JwtEncodingException exception) {
             throw new SigningKeyUnavailableException();
@@ -222,20 +196,19 @@ public class DatabaseBackedJwtTokenService implements TokenPairService {
 
     private static JwtEncoder signingEncoder(RsaSigningKeyMaterial material) {
         RSAKey signingKey = new RSAKey.Builder(material.publicKey())
-                .privateKey(material.privateKey())
-                .keyID(material.keyId())
-                .algorithm(JWSAlgorithm.RS256)
-                .keyUse(KeyUse.SIGNATURE)
-                .build();
-        JWKSource<SecurityContext> signingKeySource = (selector, context) ->
-                selector.select(new JWKSet(signingKey));
+            .privateKey(material.privateKey())
+            .keyID(material.keyId())
+            .algorithm(JWSAlgorithm.RS256)
+            .keyUse(KeyUse.SIGNATURE)
+            .build();
+        JWKSource<SecurityContext> signingKeySource = (selector, context) ->selector.select(new JWKSet(signingKey));
         return new NimbusJwtEncoder(signingKeySource);
     }
 
     private static void requireIssueState(
-            IdentityAccount identity,
-            AuthenticationSession session,
-            Instant now
+        IdentityAccount identity,
+        AuthenticationSession session,
+        Instant now
     ) {
         if (identity == null || session == null || now == null
                 || !identity.getId().equals(session.getIdentityId())

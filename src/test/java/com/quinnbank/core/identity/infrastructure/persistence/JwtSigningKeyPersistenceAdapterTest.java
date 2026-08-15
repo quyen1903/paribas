@@ -11,18 +11,18 @@ import static org.mockito.Mockito.when;
 
 class JwtSigningKeyPersistenceAdapterTest {
     @Test
-    void flushesEachLifecycleWriteSoRotationDemotesBeforeItInserts() {
+    void savesVerificationKeyWithoutForcingARotationFlush() {
         SpringDataJwtSigningKeyRepository springDataRepository =
                 mock(SpringDataJwtSigningKeyRepository.class);
         JwtSigningKey signingKey = mock(JwtSigningKey.class);
         JwtSigningKeyPersistenceAdapter adapter =
                 new JwtSigningKeyPersistenceAdapter(springDataRepository);
-        when(springDataRepository.saveAndFlush(signingKey)).thenReturn(signingKey);
+        when(springDataRepository.save(signingKey)).thenReturn(signingKey);
 
         JwtSigningKey saved = adapter.save(signingKey);
 
         assertSame(signingKey, saved);
-        verify(springDataRepository).saveAndFlush(signingKey);
-        verify(springDataRepository, never()).save(signingKey);
+        verify(springDataRepository).save(signingKey);
+        verify(springDataRepository, never()).saveAndFlush(signingKey);
     }
 }

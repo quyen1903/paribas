@@ -27,42 +27,42 @@ public final class IdentityJwtDecoderFactory {
     }
 
     public static JwtDecoder accessTokenDecoder(
-            DatabaseJwkSource jwkSource,
-            IdentityAuthenticationProperties properties,
-            IdentityAccountRepository identityAccounts,
-            AuthenticationSessionRepository sessions,
-            JwtSigningKeyRepository signingKeys,
-            Clock clock
+        DatabaseJwkSource jwkSource,
+        IdentityAuthenticationProperties properties,
+        IdentityAccountRepository identityAccounts,
+        AuthenticationSessionRepository sessions,
+        JwtSigningKeyRepository signingKeys,
+        Clock clock
     ) {
         List<OAuth2TokenValidator<Jwt>> validators = baseValidators(
-                properties,
-                properties.getAccessAudience(),
-                IdentityJwtClaimValidator.ACCESS_TOKEN_USE,
-                ACCESS_HEADER_TYPE,
-                properties.getAccessTokenTtl(),
-                signingKeys,
-                clock
+            properties,
+            properties.getAccessAudience(),
+            IdentityJwtClaimValidator.ACCESS_TOKEN_USE,
+            ACCESS_HEADER_TYPE,
+            properties.getAccessTokenTtl(),
+            signingKeys,
+            clock
         );
         validators.add(new AccessTokenStateValidator(identityAccounts, sessions, clock));
         return decoder(jwkSource, validators);
     }
 
     public static JwtDecoder refreshTokenDecoder(
-            DatabaseJwkSource jwkSource,
-            IdentityAuthenticationProperties properties,
-            JwtSigningKeyRepository signingKeys,
-            Clock clock
+        DatabaseJwkSource jwkSource,
+        IdentityAuthenticationProperties properties,
+        JwtSigningKeyRepository signingKeys,
+        Clock clock
     ) {
         return decoder(
                 jwkSource,
                 baseValidators(
-                        properties,
-                        properties.getRefreshAudience(),
-                        IdentityJwtClaimValidator.REFRESH_TOKEN_USE,
-                        REFRESH_HEADER_TYPE,
-                        properties.getRefreshTokenTtl(),
-                        signingKeys,
-                        clock
+                    properties,
+                    properties.getRefreshAudience(),
+                    IdentityJwtClaimValidator.REFRESH_TOKEN_USE,
+                    REFRESH_HEADER_TYPE,
+                    properties.getRefreshTokenTtl(),
+                    signingKeys,
+                    clock
                 )
         );
     }
@@ -71,21 +71,22 @@ public final class IdentityJwtDecoderFactory {
             DatabaseJwkSource jwkSource,
             List<OAuth2TokenValidator<Jwt>> validators
     ) {
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSource(jwkSource)
-                .jwsAlgorithm(SignatureAlgorithm.RS256)
-                .build();
+        NimbusJwtDecoder decoder = NimbusJwtDecoder
+            .withJwkSource(jwkSource)
+            .jwsAlgorithm(SignatureAlgorithm.RS256)
+            .build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(validators));
         return decoder;
     }
 
     private static List<OAuth2TokenValidator<Jwt>> baseValidators(
-            IdentityAuthenticationProperties properties,
-            String audience,
-            String tokenUse,
-            String headerType,
-            Duration maximumLifetime,
-            JwtSigningKeyRepository signingKeys,
-            Clock clock
+        IdentityAuthenticationProperties properties,
+        String audience,
+        String tokenUse,
+        String headerType,
+        Duration maximumLifetime,
+        JwtSigningKeyRepository signingKeys,
+        Clock clock
     ) {
         String issuer = requireText(properties.getIssuer(), "issuer");
         String requiredAudience = requireText(audience, "audience");
@@ -104,7 +105,7 @@ public final class IdentityJwtDecoderFactory {
         validators.add(new JwtIssuerValidator(issuer));
         validators.add(type);
         validators.add(new IdentityJwtClaimValidator(requiredAudience, tokenUse, maximumLifetime));
-        validators.add(new JwtSigningKeyLifecycleValidator(signingKeys, clock));
+        validators.add(new JwtSigningKeyLifecycleValidator(signingKeys, clock, clockSkew));
         return validators;
     }
 

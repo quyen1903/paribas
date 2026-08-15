@@ -15,10 +15,6 @@ public class IdentityAuthenticationProperties {
     private int loginLockThreshold = 5;
     private Duration loginLockDuration = Duration.ofMinutes(15);
     private int bcryptStrength = 12;
-    private String signingKeyId = "";
-    private String privateKeyLocation = "";
-    private String publicKeyLocation = "";
-    private String trustedPublicKeySha256 = "";
     private int registrationLimitPerMinute = 5;
     private int loginSourceLimitPerMinute = 20;
     private int loginIdentifierLimitPerMinute = 10;
@@ -94,38 +90,6 @@ public class IdentityAuthenticationProperties {
 
     public void setBcryptStrength(int bcryptStrength) {
         this.bcryptStrength = bcryptStrength;
-    }
-
-    public String getSigningKeyId() {
-        return signingKeyId;
-    }
-
-    public void setSigningKeyId(String signingKeyId) {
-        this.signingKeyId = signingKeyId;
-    }
-
-    public String getPrivateKeyLocation() {
-        return privateKeyLocation;
-    }
-
-    public void setPrivateKeyLocation(String privateKeyLocation) {
-        this.privateKeyLocation = privateKeyLocation;
-    }
-
-    public String getPublicKeyLocation() {
-        return publicKeyLocation;
-    }
-
-    public void setPublicKeyLocation(String publicKeyLocation) {
-        this.publicKeyLocation = publicKeyLocation;
-    }
-
-    public String getTrustedPublicKeySha256() {
-        return trustedPublicKeySha256;
-    }
-
-    public void setTrustedPublicKeySha256(String trustedPublicKeySha256) {
-        this.trustedPublicKeySha256 = trustedPublicKeySha256;
     }
 
     public int getRegistrationLimitPerMinute() {

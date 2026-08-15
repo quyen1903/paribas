@@ -46,11 +46,29 @@ class IdentityJwtValidatorsTest {
         when(signingKey.getVerifyOnlyAt()).thenReturn(NOW);
         JwtSigningKeyLifecycleValidator validator = new JwtSigningKeyLifecycleValidator(
                 signingKeys,
-                Clock.fixed(NOW.plusSeconds(1), ZoneOffset.UTC)
+                Clock.fixed(NOW.plusSeconds(1), ZoneOffset.UTC),
+                Duration.ZERO
         );
 
         assertFalse(validator.validate(lifecycleToken(NOW.minusSeconds(1))).hasErrors());
         assertTrue(validator.validate(lifecycleToken(NOW.plusSeconds(1))).hasErrors());
+    }
+
+    @Test
+    void keyLifecycleHonorsConfiguredClockSkewWhenVerifierClockTrailsIssuer() {
+        JwtSigningKeyRepository signingKeys = mock(JwtSigningKeyRepository.class);
+        JwtSigningKey signingKey = mock(JwtSigningKey.class);
+        when(signingKeys.findByKeyId("retired-key")).thenReturn(Optional.of(signingKey));
+        when(signingKey.canVerify(NOW.plusSeconds(20))).thenReturn(true);
+        when(signingKey.getCreatedAt()).thenReturn(NOW);
+        when(signingKey.getVerifyOnlyAt()).thenReturn(NOW);
+        JwtSigningKeyLifecycleValidator validator = new JwtSigningKeyLifecycleValidator(
+                signingKeys,
+                Clock.fixed(NOW.minusSeconds(10), ZoneOffset.UTC),
+                Duration.ofSeconds(30)
+        );
+
+        assertFalse(validator.validate(lifecycleToken(NOW)).hasErrors());
     }
 
     private static Jwt token(Instant issuedAt, Instant expiresAt) {

@@ -20,10 +20,10 @@ public class InMemoryAuthenticationThrottle implements AuthenticationThrottle {
     private final int refreshLimit;
 
     public InMemoryAuthenticationThrottle(
-            int registrationLimit,
-            int loginSourceLimit,
-            int loginIdentifierLimit,
-            int refreshLimit
+        int registrationLimit,
+        int loginSourceLimit,
+        int loginIdentifierLimit,
+        int refreshLimit
     ) {
         this.registrationLimit = requirePositive(registrationLimit, "registrationLimit");
         this.loginSourceLimit = requirePositive(loginSourceLimit, "loginSourceLimit");

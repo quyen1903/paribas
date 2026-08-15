@@ -18,9 +18,9 @@ public class IdentityJwtClaimValidator implements OAuth2TokenValidator<Jwt> {
     public static final String REFRESH_TOKEN_USE = "refresh";
 
     private static final OAuth2Error INVALID_TOKEN = new OAuth2Error(
-            "invalid_token",
-            "The token claims are invalid.",
-            null
+        "invalid_token",
+        "The token claims are invalid.",
+        null
     );
 
     private final String expectedAudience;
@@ -28,9 +28,9 @@ public class IdentityJwtClaimValidator implements OAuth2TokenValidator<Jwt> {
     private final Duration maximumLifetime;
 
     public IdentityJwtClaimValidator(
-            String expectedAudience,
-            String expectedTokenUse,
-            Duration maximumLifetime
+        String expectedAudience,
+        String expectedTokenUse,
+        Duration maximumLifetime
     ) {
         this.expectedAudience = requireText(expectedAudience, "expectedAudience");
         this.expectedTokenUse = requireText(expectedTokenUse, "expectedTokenUse");

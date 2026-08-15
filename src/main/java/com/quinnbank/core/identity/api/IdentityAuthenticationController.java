@@ -33,9 +33,9 @@ public class IdentityAuthenticationController {
     private final RefreshTokenService refreshTokenService;
 
     public IdentityAuthenticationController(
-            RegisterIdentityService registerIdentityService,
-            LoginIdentityService loginIdentityService,
-            RefreshTokenService refreshTokenService
+        RegisterIdentityService registerIdentityService,
+        LoginIdentityService loginIdentityService,
+        RefreshTokenService refreshTokenService
     ) {
         this.registerIdentityService = registerIdentityService;
         this.loginIdentityService = loginIdentityService;
@@ -43,68 +43,77 @@ public class IdentityAuthenticationController {
     }
 
     @PostMapping(
-            value = "/register",
-            consumes = MediaType.APPLICATION_JSON_VALUE,
-            produces = MediaType.APPLICATION_JSON_VALUE
+        value = "/register",
+        consumes = MediaType.APPLICATION_JSON_VALUE,
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     public ResponseEntity<TokenPairResponse> register(
-            @Valid @RequestBody RegisterIdentityRequest request,
-            HttpServletRequest httpRequest
+        @Valid 
+        @RequestBody 
+        RegisterIdentityRequest request,
+        HttpServletRequest httpRequest
     ) {
         RegisterIdentityCommand command = new RegisterIdentityCommand(
-                request.loginIdentifier(),
-                request.password(),
-                CorrelationIdFilter.getCorrelationId(httpRequest),
-                sourceAddress(httpRequest)
+            request.loginIdentifier(),
+            request.password(),
+            CorrelationIdFilter.getCorrelationId(httpRequest),
+            sourceAddress(httpRequest)
         );
 
         IssuedTokenPair issuedTokenPair = registerIdentityService.register(command);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .cacheControl(CacheControl.noStore())
-                .body(TokenPairResponse.from(issuedTokenPair));
+        return ResponseEntity
+            .status(HttpStatus.CREATED)
+            .cacheControl(CacheControl.noStore())
+            .body(TokenPairResponse.from(issuedTokenPair));
     }
 
     @PostMapping(
-            value = "/login",
-            consumes = MediaType.APPLICATION_JSON_VALUE,
-            produces = MediaType.APPLICATION_JSON_VALUE
+        value = "/login",
+        consumes = MediaType.APPLICATION_JSON_VALUE,
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     public ResponseEntity<TokenPairResponse> login(
-            @Valid @RequestBody LoginIdentityRequest request,
-            HttpServletRequest httpRequest
+        @Valid 
+        @RequestBody 
+        LoginIdentityRequest request,
+        HttpServletRequest httpRequest
     ) {
         LoginIdentityCommand command = new LoginIdentityCommand(
-                request.loginIdentifier(),
-                request.password(),
-                CorrelationIdFilter.getCorrelationId(httpRequest),
-                sourceAddress(httpRequest)
+            request.loginIdentifier(),
+            request.password(),
+            CorrelationIdFilter.getCorrelationId(httpRequest),
+            sourceAddress(httpRequest)
         );
 
         IssuedTokenPair issuedTokenPair = loginIdentityService.login(command);
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .body(TokenPairResponse.from(issuedTokenPair));
+        return ResponseEntity
+            .ok()
+            .cacheControl(CacheControl.noStore())
+            .body(TokenPairResponse.from(issuedTokenPair));
     }
 
     @PostMapping(
-            value = "/refresh",
-            consumes = MediaType.APPLICATION_JSON_VALUE,
-            produces = MediaType.APPLICATION_JSON_VALUE
+        value = "/refresh",
+        consumes = MediaType.APPLICATION_JSON_VALUE,
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     public ResponseEntity<TokenPairResponse> refresh(
-            @Valid @RequestBody RefreshTokenRequest request,
-            HttpServletRequest httpRequest
+        @Valid 
+        @RequestBody 
+        RefreshTokenRequest request,
+        HttpServletRequest httpRequest
     ) {
         RefreshTokenCommand command = new RefreshTokenCommand(
-                request.refreshToken(),
-                CorrelationIdFilter.getCorrelationId(httpRequest),
-                sourceAddress(httpRequest)
+            request.refreshToken(),
+            CorrelationIdFilter.getCorrelationId(httpRequest),
+            sourceAddress(httpRequest)
         );
 
         IssuedTokenPair issuedTokenPair = refreshTokenService.refresh(command);
-        return ResponseEntity.ok()
-                .cacheControl(CacheControl.noStore())
-                .body(TokenPairResponse.from(issuedTokenPair));
+        return ResponseEntity
+            .ok()
+            .cacheControl(CacheControl.noStore())
+            .body(TokenPairResponse.from(issuedTokenPair));
     }
 
     private static String sourceAddress(HttpServletRequest request) {

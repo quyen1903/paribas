@@ -3,9 +3,9 @@ package com.quinnbank.core.identity.application.command;
 import java.util.Objects;
 
 public record RefreshTokenCommand(
-        String refreshToken,
-        String correlationId,
-        String sourceAddress
+    String refreshToken,
+    String correlationId,
+    String sourceAddress
 ) {
     public RefreshTokenCommand {
         Objects.requireNonNull(refreshToken, "refreshToken is required.");

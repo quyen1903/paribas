@@ -29,60 +29,60 @@ public class IdentityApiExceptionHandler {
     @ExceptionHandler(IdentityAlreadyExistsException.class)
     public ResponseEntity<IdentityApiErrorResponse> identityAlreadyExists(HttpServletRequest request) {
         return error(
-                HttpStatus.CONFLICT,
-                "REGISTRATION_CONFLICT",
-                "Identity registration could not be completed.",
-                request
+            HttpStatus.CONFLICT,
+            "REGISTRATION_CONFLICT",
+            "Identity registration could not be completed.",
+            request
         );
     }
 
     @ExceptionHandler(ConcurrentIdentityRegistrationException.class)
     public ResponseEntity<IdentityApiErrorResponse> concurrentRegistrationConflict(HttpServletRequest request) {
         return error(
-                HttpStatus.CONFLICT,
-                "REGISTRATION_CONFLICT",
-                "Identity registration could not be completed.",
-                request
+            HttpStatus.CONFLICT,
+            "REGISTRATION_CONFLICT",
+            "Identity registration could not be completed.",
+            request
         );
     }
 
     @ExceptionHandler(InvalidCredentialsException.class)
     public ResponseEntity<IdentityApiErrorResponse> invalidCredentials(HttpServletRequest request) {
         return error(
-                HttpStatus.UNAUTHORIZED,
-                "INVALID_CREDENTIALS",
-                "The login identifier or password is invalid.",
-                request
+            HttpStatus.UNAUTHORIZED,
+            "INVALID_CREDENTIALS",
+            "The login identifier or password is invalid.",
+            request
         );
     }
 
     @ExceptionHandler(InvalidRefreshTokenException.class)
     public ResponseEntity<IdentityApiErrorResponse> invalidRefreshToken(HttpServletRequest request) {
         return error(
-                HttpStatus.UNAUTHORIZED,
-                "INVALID_REFRESH_TOKEN",
-                "The refresh token is invalid or expired.",
-                request
+            HttpStatus.UNAUTHORIZED,
+            "INVALID_REFRESH_TOKEN",
+            "The refresh token is invalid or expired.",
+            request
         );
     }
 
     @ExceptionHandler(AuthenticationRateLimitExceededException.class)
     public ResponseEntity<IdentityApiErrorResponse> rateLimitExceeded(HttpServletRequest request) {
         return error(
-                HttpStatus.TOO_MANY_REQUESTS,
-                "AUTHENTICATION_RATE_LIMIT_EXCEEDED",
-                "Too many authentication attempts. Try again later.",
-                request
+            HttpStatus.TOO_MANY_REQUESTS,
+            "AUTHENTICATION_RATE_LIMIT_EXCEEDED",
+            "Too many authentication attempts. Try again later.",
+            request
         );
     }
 
     @ExceptionHandler(SigningKeyUnavailableException.class)
     public ResponseEntity<IdentityApiErrorResponse> signingKeyUnavailable(HttpServletRequest request) {
         return error(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                "SIGNING_KEY_UNAVAILABLE",
-                "Authentication is temporarily unavailable.",
-                request
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "SIGNING_KEY_UNAVAILABLE",
+            "Authentication is temporarily unavailable.",
+            request
         );
     }
 
@@ -96,40 +96,42 @@ public class IdentityApiExceptionHandler {
             fieldErrors.putIfAbsent(fieldError.getField(), "Invalid value.");
         }
 
-        return ResponseEntity.badRequest()
-                .cacheControl(CacheControl.noStore())
-                .body(IdentityApiErrorResponse.validation(correlationId(request), fieldErrors));
+        return ResponseEntity
+            .badRequest()
+            .cacheControl(CacheControl.noStore())
+            .body(IdentityApiErrorResponse.validation(correlationId(request), fieldErrors));
     }
 
     @ExceptionHandler(InvalidIdentityRegistrationException.class)
     public ResponseEntity<IdentityApiErrorResponse> invalidRegistration(HttpServletRequest request) {
         return error(
-                HttpStatus.BAD_REQUEST,
-                "INVALID_REGISTRATION_REQUEST",
-                "The identity registration request is invalid.",
-                request
+            HttpStatus.BAD_REQUEST,
+            "INVALID_REGISTRATION_REQUEST",
+            "The identity registration request is invalid.",
+            request
         );
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<IdentityApiErrorResponse> unreadableRequest(HttpServletRequest request) {
         return error(
-                HttpStatus.BAD_REQUEST,
-                "MALFORMED_REQUEST",
-                "The request body is invalid.",
-                request
+            HttpStatus.BAD_REQUEST,
+            "MALFORMED_REQUEST",
+            "The request body is invalid.",
+            request
         );
     }
 
     private static ResponseEntity<IdentityApiErrorResponse> error(
-            HttpStatus status,
-            String code,
-            String message,
-            HttpServletRequest request
+        HttpStatus status,
+        String code,
+        String message,
+        HttpServletRequest request
     ) {
-        return ResponseEntity.status(status)
-                .cacheControl(CacheControl.noStore())
-                .body(IdentityApiErrorResponse.of(code, message, correlationId(request)));
+        return ResponseEntity
+            .status(status)
+            .cacheControl(CacheControl.noStore())
+            .body(IdentityApiErrorResponse.of(code, message, correlationId(request)));
     }
 
     private static String correlationId(HttpServletRequest request) {
