@@ -1,8 +1,9 @@
 package com.quinnbank.core.identity.infrastructure.persistence;
 
+import com.quinnbank.core.identity.application.exception.IdentityProvisioningConflictException;
 import com.quinnbank.core.identity.application.port.IdentityAccountRepository;
-import com.quinnbank.core.identity.application.exception.ConcurrentIdentityRegistrationException;
 import com.quinnbank.core.identity.domain.IdentityAccount;
+import com.quinnbank.core.identity.domain.enums.IdentityActorType;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
@@ -13,6 +14,7 @@ import java.util.UUID;
 @Repository
 public class IdentityAccountPersistenceAdapter implements IdentityAccountRepository {
     private static final String UNIQUE_LOGIN_CONSTRAINT = "uk_identity_accounts_login_identifier";
+    private static final String UNIQUE_ACTOR_SUBJECT_CONSTRAINT = "uk_identity_accounts_actor_subject";
 
     private final SpringDataIdentityAccountRepository repository;
 
@@ -41,26 +43,39 @@ public class IdentityAccountPersistenceAdapter implements IdentityAccountReposit
     }
 
     @Override
+    public Optional<IdentityAccount> findByActorTypeAndSubjectIdForUpdate(
+        IdentityActorType actorType,
+        UUID subjectId
+    ) {
+        return repository.findByActorTypeAndSubjectIdForUpdate(actorType, subjectId);
+    }
+
+    @Override
     public IdentityAccount save(IdentityAccount identityAccount) {
         try {
             return repository.saveAndFlush(identityAccount);
         } catch (DataIntegrityViolationException exception) {
-            if (causedByUniqueLoginConstraint(exception)) {
-                throw new ConcurrentIdentityRegistrationException();
+            if (causedByIdentityUniquenessConstraint(exception)) {
+                throw new IdentityProvisioningConflictException();
             }
             throw exception;
         }
     }
 
-    private static boolean causedByUniqueLoginConstraint(Throwable failure) {
+    private static boolean causedByIdentityUniquenessConstraint(Throwable failure) {
         Throwable current = failure;
         while (current != null) {
             if (current instanceof ConstraintViolationException constraintViolation
-                    && UNIQUE_LOGIN_CONSTRAINT.equalsIgnoreCase(constraintViolation.getConstraintName())) {
+                    && isIdentityUniquenessConstraint(constraintViolation.getConstraintName())) {
                 return true;
             }
             current = current.getCause();
         }
         return false;
+    }
+
+    private static boolean isIdentityUniquenessConstraint(String constraintName) {
+        return UNIQUE_LOGIN_CONSTRAINT.equalsIgnoreCase(constraintName)
+                || UNIQUE_ACTOR_SUBJECT_CONSTRAINT.equalsIgnoreCase(constraintName);
     }
 }

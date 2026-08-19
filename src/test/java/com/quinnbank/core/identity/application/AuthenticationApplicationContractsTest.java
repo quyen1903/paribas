@@ -2,10 +2,14 @@ package com.quinnbank.core.identity.application;
 
 import com.quinnbank.core.identity.application.command.LoginIdentityCommand;
 import com.quinnbank.core.identity.application.command.RefreshTokenCommand;
-import com.quinnbank.core.identity.application.command.RegisterIdentityCommand;
+import com.quinnbank.core.identity.application.command.ProvisionCustomerIdentityCommand;
 import com.quinnbank.core.identity.application.policy.AuthenticationPolicy;
 import com.quinnbank.core.identity.application.policy.RegistrationPasswordPolicy;
 import com.quinnbank.core.identity.application.result.IssuedTokenPair;
+import com.quinnbank.core.identity.application.result.AuthenticatedSubject;
+import com.quinnbank.core.identity.application.result.IdentitySubjectType;
+import com.quinnbank.core.identity.application.result.ProvisionedIdentityStatus;
+import com.quinnbank.core.identity.application.result.ProvisionedCustomerIdentity;
 import com.quinnbank.core.identity.application.result.VerifiedRefreshToken;
 import com.quinnbank.core.identity.domain.enums.IdentityActorType;
 import org.junit.jupiter.api.Test;
@@ -26,9 +30,9 @@ class AuthenticationApplicationContractsTest {
 
     @Test
     void commandsRequirePresentFieldsAndRedactSensitiveValues() {
-        RegisterIdentityCommand registration = new RegisterIdentityCommand(
+        ProvisionCustomerIdentityCommand provisioning = new ProvisionCustomerIdentityCommand(
+                UUID.fromString("40000000-0000-0000-0000-000000000004"),
                 "synthetic-user@example.invalid",
-                "synthetic-password",
                 "synthetic-correlation",
                 "192.0.2.1"
         );
@@ -45,16 +49,15 @@ class AuthenticationApplicationContractsTest {
         );
 
         assertAll(
-                () -> assertFalse(registration.toString().contains(registration.loginIdentifier())),
-                () -> assertFalse(registration.toString().contains(registration.rawPassword())),
+                () -> assertFalse(provisioning.toString().contains(provisioning.loginIdentifier())),
                 () -> assertFalse(login.toString().contains(login.loginIdentifier())),
                 () -> assertFalse(login.toString().contains(login.rawPassword())),
                 () -> assertFalse(refresh.toString().contains(refresh.refreshToken())),
                 () -> assertThrows(
                         NullPointerException.class,
-                        () -> new RegisterIdentityCommand(
+                        () -> new ProvisionCustomerIdentityCommand(
+                                UUID.fromString("40000000-0000-0000-0000-000000000004"),
                                 null,
-                                "synthetic-password",
                                 "synthetic-correlation",
                                 "192.0.2.1"
                         )
@@ -87,12 +90,28 @@ class AuthenticationApplicationContractsTest {
                 ISSUED_AT,
                 pair.refreshExpiresAt()
         );
+        UUID customerId = UUID.fromString("40000000-0000-0000-0000-000000000004");
+        AuthenticatedSubject subject = new AuthenticatedSubject(
+                pair.identityId(),
+                IdentitySubjectType.RETAIL_CUSTOMER,
+                customerId
+        );
+        ProvisionedCustomerIdentity provisioned = new ProvisionedCustomerIdentity(
+                pair.identityId(),
+                customerId,
+                IdentitySubjectType.RETAIL_CUSTOMER,
+                ProvisionedIdentityStatus.DISABLED
+        );
 
         assertAll(
                 () -> assertFalse(pair.toString().contains(accessToken)),
                 () -> assertFalse(pair.toString().contains(refreshToken)),
                 () -> assertFalse(verified.toString().contains(sessionId.toString())),
-                () -> assertFalse(verified.toString().contains(tokenId.toString()))
+                () -> assertFalse(verified.toString().contains(tokenId.toString())),
+                () -> assertFalse(subject.toString().contains(pair.identityId().toString())),
+                () -> assertFalse(subject.toString().contains(customerId.toString())),
+                () -> assertFalse(provisioned.toString().contains(pair.identityId().toString())),
+                () -> assertFalse(provisioned.toString().contains(customerId.toString()))
         );
     }
 

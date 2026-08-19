@@ -101,6 +101,7 @@ public class IdentityAccount {
         account.subjectId = requirePresent(subjectId, "subjectId");
         account.actorType = requirePresent(actorType, "actorType");
         requirePasswordActorType(actorType);
+        requireExternalCustomerSubjectBinding(account.id, account.subjectId, actorType);
         account.loginIdentifier = normalizeLoginIdentifier(loginIdentifier);
         account.encodedPassword = requirePresent(encodedPassword, "encodedPassword").value();
         account.status = IdentityAccountStatus.DISABLED;
@@ -124,6 +125,7 @@ public class IdentityAccount {
     public boolean canAuthenticate(Instant now) {
         requirePresent(now, "now");
         return status == IdentityAccountStatus.ACTIVE
+                && hasValidBusinessSubjectBinding()
                 && (lockedUntil == null || !now.isBefore(lockedUntil));
     }
 
@@ -447,6 +449,27 @@ public class IdentityAccount {
                     "This identity type requires a non-password authentication design."
             );
         }
+    }
+
+    private boolean hasValidBusinessSubjectBinding() {
+        return !isCustomerActor(actorType) || !id.equals(subjectId);
+    }
+
+    private static void requireExternalCustomerSubjectBinding(
+        UUID identityId,
+        UUID subjectId,
+        IdentityActorType actorType
+    ) {
+        if (isCustomerActor(actorType) && identityId.equals(subjectId)) {
+            throw new IllegalArgumentException(
+                "Customer identities require a distinct business subject binding."
+            );
+        }
+    }
+
+    private static boolean isCustomerActor(IdentityActorType actorType) {
+        return actorType == IdentityActorType.RETAIL_CUSTOMER
+                || actorType == IdentityActorType.BUSINESS_CUSTOMER;
     }
 
     public static String normalizeLoginIdentifier(String value) {

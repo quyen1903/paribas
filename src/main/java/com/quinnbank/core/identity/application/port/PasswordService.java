@@ -5,6 +5,8 @@ import com.quinnbank.core.identity.domain.EncodedPassword;
 public interface PasswordService {
     EncodedPassword encode(String rawPassword);
 
+    EncodedPassword createUnusableCredential();
+
     boolean matches(String rawPassword, String encodedPassword);
 
     void performDummyMatch(String rawPassword);

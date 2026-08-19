@@ -5,10 +5,12 @@ import com.quinnbank.core.identity.application.policy.AuthenticationPolicy;
 import com.quinnbank.core.identity.application.policy.RegistrationPasswordPolicy;
 import com.quinnbank.core.identity.application.port.AuthenticationSessionRepository;
 import com.quinnbank.core.identity.application.port.AuthenticationThrottle;
+import com.quinnbank.core.identity.application.port.AuthorizationDenialAudit;
 import com.quinnbank.core.identity.application.port.IdentityAccountRepository;
 import com.quinnbank.core.identity.application.port.JwtSigningKeyRepository;
 import com.quinnbank.core.identity.application.port.PasswordService;
 import com.quinnbank.core.identity.application.port.TokenPairService;
+import com.quinnbank.core.identity.application.result.IdentitySubjectType;
 import com.quinnbank.core.identity.infrastructure.security.DatabaseBackedJwtTokenService;
 import com.quinnbank.core.identity.infrastructure.security.DatabaseJwkSource;
 import com.quinnbank.core.identity.infrastructure.security.IdentityJwtClaimValidator;
@@ -37,6 +39,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.web.SecurityFilterChain;
 
 import java.io.IOException;
@@ -45,19 +48,20 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 @Configuration
 @EnableMethodSecurity
 @EnableConfigurationProperties(IdentityAuthenticationProperties.class)
 public class IdentitySecurityConfiguration {
-    private static final String REGISTER_PATH = "/api/v1/identity/register";
     private static final String LOGIN_PATH = "/api/v1/identity/login";
     private static final String REFRESH_PATH = "/api/v1/identity/refresh";
 
     @Bean
     public SecurityFilterChain identityApiSecurityFilterChain(
         HttpSecurity http,
-        JwtDecoder accessTokenDecoder
+        JwtDecoder accessTokenDecoder,
+        AuthorizationDenialAudit authorizationDenials
     ) throws Exception {
         return http
             .csrf(AbstractHttpConfigurer::disable)
@@ -68,7 +72,7 @@ public class IdentitySecurityConfiguration {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(authorize -> authorize
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
-                .requestMatchers(HttpMethod.POST, REGISTER_PATH, LOGIN_PATH, REFRESH_PATH).permitAll()
+                .requestMatchers(HttpMethod.POST, LOGIN_PATH, REFRESH_PATH).permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
@@ -80,7 +84,8 @@ public class IdentitySecurityConfiguration {
             )
             .exceptionHandling(exceptions -> exceptions
                 .authenticationEntryPoint(this::writeUnauthorized)
-                .accessDeniedHandler(this::writeForbidden)
+                .accessDeniedHandler((request, response, exception) ->
+                    writeForbidden(request, response, authorizationDenials))
             )
             .build();
     }
@@ -208,10 +213,48 @@ public class IdentitySecurityConfiguration {
     private void writeForbidden(
         HttpServletRequest request,
         HttpServletResponse response,
-        Exception exception
+        AuthorizationDenialAudit authorizationDenials
     ) throws IOException {
+        recordHttpAuthorizationDenial(request, authorizationDenials);
         writeSecurityError(response, request, HttpServletResponse.SC_FORBIDDEN,
                 "ACCESS_DENIED", "The authenticated identity is not allowed to perform this action.");
+    }
+
+    private static void recordHttpAuthorizationDenial(
+        HttpServletRequest request,
+        AuthorizationDenialAudit authorizationDenials
+    ) {
+        String correlationId = CorrelationIdFilter.getCorrelationId(request);
+        if (request.getUserPrincipal() instanceof JwtAuthenticationToken authentication) {
+            UUID identityId;
+            IdentitySubjectType actorType;
+            try {
+                identityId = UUID.fromString(authentication.getToken().getSubject());
+                actorType = IdentitySubjectType.valueOf(
+                    authentication.getToken().getClaimAsString(IdentityJwtClaimValidator.ACTOR_TYPE_CLAIM)
+                );
+            } catch (IllegalArgumentException exception) {
+                // A validated JWT should have a known UUID subject and actor type. Audit the invalid context safely.
+                authorizationDenials.recordAnonymous(
+                    IdentitySubjectType.RETAIL_CUSTOMER,
+                    "AUTHORIZATION_CONTEXT_INVALID",
+                    correlationId
+                );
+                return;
+            }
+            authorizationDenials.recordKnown(
+                identityId,
+                actorType,
+                "HTTP_ACCESS_POLICY_DENIED",
+                correlationId
+            );
+            return;
+        }
+        authorizationDenials.recordAnonymous(
+            IdentitySubjectType.RETAIL_CUSTOMER,
+            "AUTHORIZATION_CONTEXT_INVALID",
+            correlationId
+        );
     }
 
     private static void writeSecurityError(

@@ -71,8 +71,10 @@ public class LoginIdentityService {
         String loginIdentifier = normalizeForLogin(command, now);
         throttle.checkLogin(command.sourceAddress(), loginIdentifier, now);
 
-        IdentityAccount identity = identityAccounts.findByLoginIdentifierForUpdate(loginIdentifier)
-                .orElse(null);
+        IdentityAccount identity = identityAccounts
+            .findByLoginIdentifierForUpdate(loginIdentifier)
+            .orElse(null);
+
         if (identity == null) {
             passwords.performDummyMatch(command.rawPassword());
             audits.saveAll(List.of(anonymousFailure(command.correlationId(), now)));
@@ -102,11 +104,11 @@ public class LoginIdentityService {
         identity.recordAuthenticationSuccess(command.correlationId(), now);
         identityAccounts.save(identity);
         AuthenticationSession session = AuthenticationSession.open(
-                UUID.randomUUID(),
-                identity.getId(),
-                UUID.randomUUID(),
-                now.plus(authenticationPolicy.refreshTokenTtl()),
-                now
+            UUID.randomUUID(),
+            identity.getId(),
+            UUID.randomUUID(),
+            now.plus(authenticationPolicy.refreshTokenTtl()),
+            now
         );
         sessions.save(session);
         IssuedTokenPair issuedTokens = tokenPairs.issuePair(identity, session, now);

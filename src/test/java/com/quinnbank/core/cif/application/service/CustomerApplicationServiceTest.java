@@ -138,6 +138,11 @@ class CustomerApplicationServiceTest {
         }
 
         @Override
+        public Optional<Customer> findByIdForUpdate(UUID customerId) {
+            return findById(customerId);
+        }
+
+        @Override
         public Optional<Customer> findByCustomerNumber(String customerNumber) {
             return customers.values()
                     .stream()

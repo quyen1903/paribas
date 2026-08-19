@@ -2,13 +2,18 @@ package com.quinnbank.core.identity.infrastructure.configuration;
 
 import com.quinnbank.core.identity.api.CorrelationIdFilter;
 import com.quinnbank.core.identity.api.IdentityAuthenticationController;
+import com.quinnbank.core.cif.api.CurrentCustomerController;
+import com.quinnbank.core.cif.application.result.CustomerSnapshot;
+import com.quinnbank.core.cif.application.service.GetCurrentCustomerService;
+import com.quinnbank.core.cif.domain.enums.CustomerStatus;
 import com.quinnbank.core.identity.application.port.AuthenticationSessionRepository;
+import com.quinnbank.core.identity.application.port.AuthorizationDenialAudit;
 import com.quinnbank.core.identity.application.port.IdentityAccountRepository;
 import com.quinnbank.core.identity.application.port.JwtSigningKeyRepository;
 import com.quinnbank.core.identity.application.result.IssuedTokenPair;
+import com.quinnbank.core.identity.application.result.IdentitySubjectType;
 import com.quinnbank.core.identity.application.service.LoginIdentityService;
 import com.quinnbank.core.identity.application.service.RefreshTokenService;
-import com.quinnbank.core.identity.application.service.RegisterIdentityService;
 import com.quinnbank.core.identity.domain.AuthenticationActor;
 import com.quinnbank.core.identity.domain.AuthenticationSession;
 import com.quinnbank.core.identity.domain.EncodedPassword;
@@ -51,6 +56,7 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.List;
@@ -81,6 +87,7 @@ class IdentitySecurityConfigurationTest {
     private static final UUID IDENTITY_ID = UUID.fromString("10000000-0000-0000-0000-000000000001");
     private static final UUID SESSION_ID = UUID.fromString("20000000-0000-0000-0000-000000000002");
     private static final UUID REFRESH_TOKEN_ID = UUID.fromString("30000000-0000-0000-0000-000000000003");
+    private static final UUID CUSTOMER_ID = UUID.fromString("40000000-0000-0000-0000-000000000004");
     private static final String CORRELATION_ID = "security-chain-test-correlation";
     private static final String ENCODED_PASSWORD = "$2b$12$" + "b".repeat(53);
 
@@ -90,9 +97,10 @@ class IdentitySecurityConfigurationTest {
 
     private GenericWebApplicationContext applicationContext;
     private MockMvc mockMvc;
-    private RegisterIdentityService registerIdentityService;
     private LoginIdentityService loginIdentityService;
     private RefreshTokenService refreshTokenService;
+    private GetCurrentCustomerService getCurrentCustomerService;
+    private AuthorizationDenialAudit authorizationDenials;
 
     @BeforeAll
     static void generateEphemeralSigningKey() throws Exception {
@@ -108,9 +116,10 @@ class IdentitySecurityConfigurationTest {
 
     @BeforeEach
     void setUp() {
-        registerIdentityService = mock(RegisterIdentityService.class);
         loginIdentityService = mock(LoginIdentityService.class);
         refreshTokenService = mock(RefreshTokenService.class);
+        getCurrentCustomerService = mock(GetCurrentCustomerService.class);
+        authorizationDenials = mock(AuthorizationDenialAudit.class);
         IdentityAccountRepository identityAccounts = mock(IdentityAccountRepository.class);
         AuthenticationSessionRepository sessions = mock(AuthenticationSessionRepository.class);
         JwtSigningKeyRepository signingKeys = mock(JwtSigningKeyRepository.class);
@@ -143,16 +152,21 @@ class IdentitySecurityConfigurationTest {
                 () -> sessions
         );
         applicationContext.registerBean("jwtSigningKeys", JwtSigningKeyRepository.class, () -> signingKeys);
-        applicationContext.registerBean(
-                "registerIdentityService",
-                RegisterIdentityService.class,
-                () -> registerIdentityService
-        );
         applicationContext.registerBean("loginIdentityService", LoginIdentityService.class, () -> loginIdentityService);
         applicationContext.registerBean(
                 "refreshTokenService",
                 RefreshTokenService.class,
                 () -> refreshTokenService
+        );
+        applicationContext.registerBean(
+                "getCurrentCustomerService",
+                GetCurrentCustomerService.class,
+                () -> getCurrentCustomerService
+        );
+        applicationContext.registerBean(
+                "authorizationDenials",
+                AuthorizationDenialAudit.class,
+                () -> authorizationDenials
         );
         new AnnotatedBeanDefinitionReader(applicationContext).register(
                 TestWebConfiguration.class,
@@ -177,9 +191,8 @@ class IdentitySecurityConfigurationTest {
     }
 
     @Test
-    void onlyTheExactRegistrationLoginAndRefreshPostsArePublic() throws Exception {
+    void onlyTheExactLoginAndRefreshPostsArePublic() throws Exception {
         IssuedTokenPair pair = issuedTokenPair();
-        when(registerIdentityService.register(any())).thenReturn(pair);
         when(loginIdentityService.login(any())).thenReturn(pair);
         when(refreshTokenService.refresh(any())).thenReturn(pair);
 
@@ -187,7 +200,13 @@ class IdentitySecurityConfigurationTest {
                         .header(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(credentialsBody()))
-                .andExpect(status().isCreated());
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(post("/api/v1/identity/register")
+                        .header(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID)
+                        .header(HttpHeaders.AUTHORIZATION, bearer(accessToken()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(credentialsBody()))
+                .andExpect(status().isNotFound());
         mockMvc.perform(post("/api/v1/identity/login")
                         .header(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -212,7 +231,6 @@ class IdentitySecurityConfigurationTest {
                         .header(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID))
                 .andExpect(status().isUnauthorized());
 
-        verify(registerIdentityService).register(any());
         verify(loginIdentityService).login(any());
         verify(refreshTokenService).refresh(any());
     }
@@ -256,6 +274,39 @@ class IdentitySecurityConfigurationTest {
                 .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
                 .andExpect(jsonPath("$.code").value("ACCESS_DENIED"))
                 .andExpect(jsonPath("$.correlationId").value(CORRELATION_ID));
+        verify(authorizationDenials).recordKnown(
+                IDENTITY_ID,
+                IdentitySubjectType.RETAIL_CUSTOMER,
+                "HTTP_ACCESS_POLICY_DENIED",
+                CORRELATION_ID
+        );
+    }
+
+    @Test
+    void currentCustomerEndpointRequiresAuthenticationAndAcceptsTheRetailActorAuthority() throws Exception {
+        when(getCurrentCustomerService.getCurrentCustomer(CORRELATION_ID)).thenReturn(new CustomerSnapshot(
+                CUSTOMER_ID,
+                "CIF40000000000000000000000000000004",
+                "Security",
+                "Customer",
+                "security-customer@example.invalid",
+                "+1-555-0102",
+                CustomerStatus.ACTIVE,
+                LocalDateTime.parse("2026-08-19T08:00:00"),
+                LocalDateTime.parse("2026-08-19T08:00:00")
+        ));
+
+        mockMvc.perform(get("/api/v1/customers/me")
+                        .header(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID))
+                .andExpect(status().isUnauthorized());
+
+        mockMvc.perform(get("/api/v1/customers/me")
+                        .header(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID)
+                        .header("X-Customer-Id", UUID.randomUUID().toString())
+                        .header(HttpHeaders.AUTHORIZATION, bearer(accessToken())))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
+                .andExpect(jsonPath("$.id").value(CUSTOMER_ID.toString()));
     }
 
     private static IdentityAccount activeIdentity() {
@@ -265,7 +316,7 @@ class IdentitySecurityConfigurationTest {
         );
         IdentityAccount identity = IdentityAccount.provision(
                 IDENTITY_ID,
-                IDENTITY_ID,
+                CUSTOMER_ID,
                 IdentityActorType.RETAIL_CUSTOMER,
                 "security-chain-user@example.invalid",
                 EncodedPassword.fromPasswordEncoder(ENCODED_PASSWORD),
@@ -341,12 +392,10 @@ class IdentitySecurityConfigurationTest {
     static class TestWebConfiguration {
         @Bean
         IdentityAuthenticationController identityAuthenticationController(
-                RegisterIdentityService registerIdentityService,
                 LoginIdentityService loginIdentityService,
                 RefreshTokenService refreshTokenService
         ) {
             return new IdentityAuthenticationController(
-                    registerIdentityService,
                     loginIdentityService,
                     refreshTokenService
             );
@@ -355,6 +404,11 @@ class IdentitySecurityConfigurationTest {
         @Bean
         SecurityTestController securityTestController() {
             return new SecurityTestController();
+        }
+
+        @Bean
+        CurrentCustomerController currentCustomerController(GetCurrentCustomerService getCurrentCustomerService) {
+            return new CurrentCustomerController(getCurrentCustomerService);
         }
     }
 

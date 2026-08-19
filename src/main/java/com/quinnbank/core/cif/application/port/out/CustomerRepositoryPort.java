@@ -11,6 +11,8 @@ public interface CustomerRepositoryPort {
 
     Optional<Customer> findById(UUID customerId);
 
+    Optional<Customer> findByIdForUpdate(UUID customerId);
+
     Optional<Customer> findByCustomerNumber(String customerNumber);
 
     boolean existsByEmail(String email);

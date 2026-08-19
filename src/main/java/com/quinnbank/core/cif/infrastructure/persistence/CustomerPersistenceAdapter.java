@@ -28,6 +28,11 @@ public class CustomerPersistenceAdapter implements CustomerRepositoryPort {
     }
 
     @Override
+    public Optional<Customer> findByIdForUpdate(UUID customerId) {
+        return repository.findByIdForUpdate(customerId);
+    }
+
+    @Override
     public Optional<Customer> findByCustomerNumber(String customerNumber) {
         return repository.findByCustomerNumber(customerNumber);
     }

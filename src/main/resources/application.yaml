@@ -7,7 +7,7 @@ spring:
     password: postgres
   jpa:
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
     show-sql: false
     properties:
       hibernate:
@@ -38,3 +38,6 @@ quinnbank:
       login-source-limit-per-minute: ${IDENTITY_LOGIN_SOURCE_LIMIT_PER_MINUTE:20}
       login-identifier-limit-per-minute: ${IDENTITY_LOGIN_IDENTIFIER_LIMIT_PER_MINUTE:10}
       refresh-limit-per-minute: ${IDENTITY_REFRESH_LIMIT_PER_MINUTE:30}
+
+server:
+  port: 8081

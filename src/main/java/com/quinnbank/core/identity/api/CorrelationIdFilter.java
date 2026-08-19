@@ -1,5 +1,6 @@
 package com.quinnbank.core.identity.api;
 
+import com.quinnbank.core.web.CorrelationIdContext;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -18,7 +19,7 @@ import java.util.regex.Pattern;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class CorrelationIdFilter extends OncePerRequestFilter {
     public static final String HEADER_NAME = "X-Correlation-Id";
-    public static final String REQUEST_ATTRIBUTE = CorrelationIdFilter.class.getName() + ".correlationId";
+    public static final String REQUEST_ATTRIBUTE = CorrelationIdContext.REQUEST_ATTRIBUTE;
 
     private static final int MAX_CORRELATION_ID_LENGTH = 64;
     private static final Pattern VALID_CORRELATION_ID =
@@ -47,11 +48,7 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
     }
 
     public static String getCorrelationId(HttpServletRequest request) {
-        Object value = request.getAttribute(REQUEST_ATTRIBUTE);
-        if (value instanceof String correlationId && VALID_CORRELATION_ID.matcher(correlationId).matches()) {
-            return correlationId;
-        }
-        throw new IllegalStateException("A validated correlation id is required.");
+        return CorrelationIdContext.get(request);
     }
 
     static String acceptedCorrelationId(String candidate) {

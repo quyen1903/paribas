@@ -1,22 +1,23 @@
 package com.quinnbank.core.identity.application.command;
 
 import java.util.Objects;
+import java.util.UUID;
 
-public record RegisterIdentityCommand(
+public record ProvisionCustomerIdentityCommand(
+    UUID customerId,
     String loginIdentifier,
-    String rawPassword,
     String correlationId,
     String sourceAddress
 ) {
-    public RegisterIdentityCommand {
+    public ProvisionCustomerIdentityCommand {
+        Objects.requireNonNull(customerId, "customerId is required.");
         Objects.requireNonNull(loginIdentifier, "loginIdentifier is required.");
-        Objects.requireNonNull(rawPassword, "rawPassword is required.");
         Objects.requireNonNull(correlationId, "correlationId is required.");
         Objects.requireNonNull(sourceAddress, "sourceAddress is required.");
     }
 
     @Override
     public String toString() {
-        return "RegisterIdentityCommand[redacted]";
+        return "ProvisionCustomerIdentityCommand[redacted]";
     }
 }

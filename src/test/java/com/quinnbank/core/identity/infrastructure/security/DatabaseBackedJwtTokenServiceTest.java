@@ -318,7 +318,7 @@ class DatabaseBackedJwtTokenServiceTest {
         UUID identityId = UUID.fromString("30000000-0000-0000-0000-000000000003");
         IdentityAccount identity = IdentityAccount.provision(
                 identityId,
-                identityId,
+                UUID.fromString("40000000-0000-0000-0000-000000000004"),
                 IdentityActorType.RETAIL_CUSTOMER,
                 "jwt-user@example.invalid",
                 EncodedPassword.fromPasswordEncoder(ENCODED_PASSWORD),
@@ -477,6 +477,16 @@ class DatabaseBackedJwtTokenServiceTest {
         @Override
         public Optional<IdentityAccount> findByIdForUpdate(UUID identityId) {
             return findById(identityId);
+        }
+
+        @Override
+        public Optional<IdentityAccount> findByActorTypeAndSubjectIdForUpdate(
+                IdentityActorType actorType,
+                UUID subjectId
+        ) {
+            return identity.getActorType() == actorType && identity.getSubjectId().equals(subjectId)
+                    ? Optional.of(identity)
+                    : Optional.empty();
         }
 
         @Override

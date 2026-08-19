@@ -2,22 +2,15 @@ package com.quinnbank.core.identity.api;
 
 import com.quinnbank.core.identity.api.request.LoginIdentityRequest;
 import com.quinnbank.core.identity.api.request.RefreshTokenRequest;
-import com.quinnbank.core.identity.api.request.RegisterIdentityRequest;
 import com.quinnbank.core.identity.api.response.TokenPairResponse;
 import com.quinnbank.core.identity.application.command.LoginIdentityCommand;
 import com.quinnbank.core.identity.application.command.RefreshTokenCommand;
-import com.quinnbank.core.identity.application.command.RegisterIdentityCommand;
 import com.quinnbank.core.identity.application.exception.AuthenticationRateLimitExceededException;
-import com.quinnbank.core.identity.application.exception.ConcurrentIdentityRegistrationException;
-import com.quinnbank.core.identity.application.exception.IdentityAlreadyExistsException;
 import com.quinnbank.core.identity.application.exception.InvalidCredentialsException;
-import com.quinnbank.core.identity.application.exception.InvalidIdentityRegistrationException;
 import com.quinnbank.core.identity.application.exception.InvalidRefreshTokenException;
-import com.quinnbank.core.identity.application.exception.SigningKeyUnavailableException;
 import com.quinnbank.core.identity.application.result.IssuedTokenPair;
 import com.quinnbank.core.identity.application.service.LoginIdentityService;
 import com.quinnbank.core.identity.application.service.RefreshTokenService;
-import com.quinnbank.core.identity.application.service.RegisterIdentityService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -53,19 +46,16 @@ class IdentityAuthenticationControllerTest {
     private static final String ACCESS_TOKEN = "synthetic.access.token";
     private static final String REFRESH_TOKEN = "synthetic.refresh.token";
 
-    private RegisterIdentityService registerIdentityService;
     private LoginIdentityService loginIdentityService;
     private RefreshTokenService refreshTokenService;
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        registerIdentityService = mock(RegisterIdentityService.class);
         loginIdentityService = mock(LoginIdentityService.class);
         refreshTokenService = mock(RefreshTokenService.class);
 
         IdentityAuthenticationController controller = new IdentityAuthenticationController(
-                registerIdentityService,
                 loginIdentityService,
                 refreshTokenService
         );
@@ -73,46 +63,6 @@ class IdentityAuthenticationControllerTest {
                 .setControllerAdvice(new IdentityApiExceptionHandler())
                 .addFilters(new CorrelationIdFilter())
                 .build();
-    }
-
-    @Test
-    void registerReturnsCreatedTokenPairWithoutCachingAndPassesServerContext() throws Exception {
-        UUID identityId = UUID.fromString("deeeeb72-dcc3-4867-95d4-70a64552e0e4");
-        IssuedTokenPair issuedTokenPair = issuedTokenPair(identityId);
-        when(registerIdentityService.register(any())).thenReturn(issuedTokenPair);
-
-        mockMvc.perform(post("/api/v1/identity/register")
-                        .header(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID)
-                        .with(request -> {
-                            request.setRemoteAddr("192.0.2.10");
-                            return request;
-                        })
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "loginIdentifier": "api-user@example.invalid",
-                                  "password": "synthetic-login-password"
-                                }
-                                """))
-                .andExpect(status().isCreated())
-                .andExpect(header().string(CorrelationIdFilter.HEADER_NAME, CORRELATION_ID))
-                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-store"))
-                .andExpect(jsonPath("$.identityId").value(identityId.toString()))
-                .andExpect(jsonPath("$.tokenType").value("Bearer"))
-                .andExpect(jsonPath("$.accessToken").value(ACCESS_TOKEN))
-                .andExpect(jsonPath("$.accessExpiresAt").value("2030-01-01T00:05:00Z"))
-                .andExpect(jsonPath("$.refreshToken").value(REFRESH_TOKEN))
-                .andExpect(jsonPath("$.refreshExpiresAt").value("2030-01-08T00:00:00Z"));
-
-        ArgumentCaptor<RegisterIdentityCommand> commandCaptor = ArgumentCaptor.forClass(RegisterIdentityCommand.class);
-        verify(registerIdentityService).register(commandCaptor.capture());
-        RegisterIdentityCommand command = commandCaptor.getValue();
-        assertAll(
-                () -> assertEquals(LOGIN_IDENTIFIER, command.loginIdentifier()),
-                () -> assertEquals(RAW_PASSWORD, command.rawPassword()),
-                () -> assertEquals(CORRELATION_ID, command.correlationId()),
-                () -> assertEquals("192.0.2.10", command.sourceAddress())
-        );
     }
 
     @Test
@@ -192,42 +142,9 @@ class IdentityAuthenticationControllerTest {
 
     @Test
     void applicationFailuresUseStableStatusCodesAndSafeMessages() throws Exception {
-        when(registerIdentityService.register(any()))
-                .thenThrow(new IdentityAlreadyExistsException())
-                .thenThrow(new ConcurrentIdentityRegistrationException())
-                .thenThrow(new SigningKeyUnavailableException())
-                .thenThrow(new InvalidIdentityRegistrationException());
         when(loginIdentityService.login(any())).thenThrow(new AuthenticationRateLimitExceededException());
         when(refreshTokenService.refresh(any())).thenThrow(new InvalidRefreshTokenException());
 
-        expectError(
-                "/api/v1/identity/register",
-                registerBody(),
-                409,
-                "REGISTRATION_CONFLICT",
-                "Identity registration could not be completed."
-        );
-        expectError(
-                "/api/v1/identity/register",
-                registerBody(),
-                409,
-                "REGISTRATION_CONFLICT",
-                "Identity registration could not be completed."
-        );
-        expectError(
-                "/api/v1/identity/register",
-                registerBody(),
-                503,
-                "SIGNING_KEY_UNAVAILABLE",
-                "Authentication is temporarily unavailable."
-        );
-        expectError(
-                "/api/v1/identity/register",
-                registerBody(),
-                400,
-                "INVALID_REGISTRATION_REQUEST",
-                "The identity registration request is invalid."
-        );
         expectError(
                 "/api/v1/identity/login",
                 loginBody(),
@@ -270,14 +187,11 @@ class IdentityAuthenticationControllerTest {
     @Test
     void authenticationDtosRedactSecretsFromToString() {
         UUID identityId = UUID.randomUUID();
-        RegisterIdentityRequest registerRequest = new RegisterIdentityRequest(LOGIN_IDENTIFIER, RAW_PASSWORD);
         LoginIdentityRequest loginRequest = new LoginIdentityRequest(LOGIN_IDENTIFIER, RAW_PASSWORD);
         RefreshTokenRequest refreshRequest = new RefreshTokenRequest(REFRESH_TOKEN);
         TokenPairResponse response = TokenPairResponse.from(issuedTokenPair(identityId));
 
         assertAll(
-                () -> assertFalse(registerRequest.toString().contains(LOGIN_IDENTIFIER)),
-                () -> assertFalse(registerRequest.toString().contains(RAW_PASSWORD)),
                 () -> assertFalse(loginRequest.toString().contains(LOGIN_IDENTIFIER)),
                 () -> assertFalse(loginRequest.toString().contains(RAW_PASSWORD)),
                 () -> assertFalse(refreshRequest.toString().contains(REFRESH_TOKEN)),
@@ -319,17 +233,13 @@ class IdentityAuthenticationControllerTest {
         );
     }
 
-    private static String registerBody() {
+    private static String loginBody() {
         return """
                 {
                   "loginIdentifier": "api-user@example.invalid",
                   "password": "synthetic-login-password"
                 }
                 """;
-    }
-
-    private static String loginBody() {
-        return registerBody();
     }
 
     private static String refreshBody() {

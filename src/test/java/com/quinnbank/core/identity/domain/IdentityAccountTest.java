@@ -94,6 +94,28 @@ class IdentityAccountTest {
     }
 
     @Test
+    void customerProvisioningRejectsAnIdentityThatPointsToItselfAsTheBusinessSubject() {
+        for (IdentityActorType actorType : List.of(
+                IdentityActorType.RETAIL_CUSTOMER,
+                IdentityActorType.BUSINESS_CUSTOMER
+        )) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> IdentityAccount.provision(
+                            IDENTITY_ID,
+                            IDENTITY_ID,
+                            actorType,
+                            "customer@example.invalid",
+                            EncodedPassword.fromPasswordEncoder(ORIGINAL_PASSWORD),
+                            OPERATOR,
+                            "invalid-subject-binding",
+                            CREATED_AT
+                    )
+            );
+        }
+    }
+
+    @Test
     void enabledAccountCanAuthenticateAndSuccessfulAuthenticationResetsFailureState() {
         IdentityAccount account = provisionAccount();
         account.releaseAuditEvents();

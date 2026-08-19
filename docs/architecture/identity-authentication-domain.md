@@ -29,16 +29,19 @@ transition. Only interactive actor types may use the password-backed aggregate.
 Service accounts, partners, and batch jobs require a separately reviewed
 authentication mechanism.
 
-Raw passwords exist only transiently in redacted registration/login API and
-application inputs. They never enter a domain entity, migration, fixture, log,
-audit event, or persistence model. The encoded password is an authentication
-secret and must not be logged or serialized.
+Raw customer passwords exist only transiently in redacted login inputs. CIF
+provisioning never accepts a customer password; Identity stores a BCrypt value
+derived from server-generated random material that is not returned to any
+caller. A future activation flow must replace it only after ownership proof.
+Raw passwords never enter a domain entity, migration, fixture, log, audit event,
+or persistence model.
+The encoded password is an authentication secret and must not be logged or
+serialized.
 
 ## Runtime Flows And Application Boundary
 
 The exact public HTTP allowlist is:
 
-- `POST /api/v1/identity/register`
 - `POST /api/v1/identity/login`
 - `POST /api/v1/identity/refresh`
 
@@ -46,13 +49,24 @@ Every other route requires an access JWT. The refresh route is public only at
 the HTTP-filter level; its signed, server-revocable refresh JWT is the
 credential. HTTP Basic, form login, and server sessions are disabled.
 
-Self-registration always creates a server-selected `RETAIL_CUSTOMER`. The
-client cannot choose actor type, subject id, status, authority, or scope. Until
-an onboarding contract exists, the identity id is also used as the isolated
-authentication subject id; no CIF repository or entity is called.
+Public self-registration is intentionally absent. A public request must never
+select or submit a CIF/customer subject id because that would permit
+cross-customer credential binding. Identity instead exposes the narrow
+`ProvisionCustomerIdentityUseCase` application contract to a trusted
+CIF/onboarding coordinator. The coordinator loads the customer server-side and
+passes `Customer.id`; Identity creates a distinct identity id, fixes actor type
+to `RETAIL_CUSTOMER`, stores the customer id as `subjectId`, and leaves the new
+identity `DISABLED`. Provisioning creates no session and returns no token.
 
-Registration provisions and enables the identity, opens an authentication
-session, signs a token pair, and persists all audit events in one transaction.
+The current CIF coordinator accepts only an `ACTIVE` customer, locks that row,
+and derives the login identifier from the stored customer email. `ACTIVE` is not
+proof of KYC approval. Exposing provisioning or enabling the identity requires
+a separately reviewed activation/KYC contract. Identity fixes the provisioning
+audit actor to a server-side `SERVICE_ACCOUNT`; callers cannot select target
+actor type, status, authority, scope, or password. That fixed audit attribution
+does not replace caller authorization, which remains a release gate before the
+internal command gets a production caller.
+
 Login locks the identity row, performs BCrypt verification outside the domain,
 updates success/failure state, opens a session, and persists audit evidence in
 one transaction. Failed credential updates use an explicit commit-on-expected-
@@ -67,21 +81,33 @@ successful rotation, so an undisclosed replacement does not burn the current
 credential.
 
 Concurrent authentication failures and refreshes use pessimistic row locks;
-mutable aggregates also retain optimistic versions. A bounded process-local
-rate limiter covers registration, login source/login identifier, and refresh
-requests. It supplements account lockout, but a shared gateway/distributed
-limiter is still required for a multi-node production deployment.
+mutable aggregates also retain optimistic versions. Customer identity
+provisioning locks an existing `(actorType, subjectId)` binding and treats a
+same-customer/same-login replay as success only while it remains `DISABLED`;
+database unique constraints remain the last race guard. A concurrent first
+provision can still return a safe conflict
+and requires caller retry. A bounded process-local rate limiter covers
+provisioning source, login source/login identifier, and refresh requests. It
+supplements account lockout, but a shared gateway/distributed limiter is still
+required for a multi-node production deployment.
 
-Registration does not yet implement an idempotency key/replay record. A retry
-after a lost 201 can return a conflict while the first session remains valid.
-That is an explicit residual risk, not an idempotent contract.
+`AuthenticatedSubjectProvider` keeps JWT `sub` as the identity id, loads the
+current `IdentityAccount` through the Identity repository port, verifies the
+token actor type against stored state, and returns the server-stored
+`subjectId`. CIF's `GET /api/v1/customers/me` uses that contract and never
+accepts a customer id from the client, so the application read is scoped to the
+authenticated business subject as well as protected at the HTTP boundary.
+Denied customer-profile reads and method-security denials are persisted as
+append-only `AUTHORIZATION_DENIED` audit events with safe reason and correlation
+codes, without copying customer profile fields.
 
 ## JWT And Ephemeral Key Lifecycle
 
 Both access and refresh tokens are RS256 JWTs produced by Spring Security's
 Nimbus integration. Access tokens default to five minutes; refresh sessions
 default to seven days. Both carry only opaque identity/session identifiers and
-server-derived actor type. Validation requires the fixed algorithm, `kid`,
+server-derived actor type; CIF/customer identifiers remain server-side.
+Validation requires the fixed algorithm, `kid`,
 header type, issuer, exact audience, subject, JTI, issued-at, not-before,
 expiration, token use, active identity, and active session. Refresh JWTs are
 never accepted as API bearer access tokens.
@@ -137,7 +163,7 @@ authentication secrets. Authentication events are audit/security evidence.
 The audit table contains identity and actor references, action, decision,
 authentication method, stable reason code, correlation id, and UTC timestamp.
 It never contains a submitted password, encoded password, token, or submitted
-unknown login identifier. Unknown login/registration/refresh failures use a
+unknown login identifier. Unknown login/refresh failures use a
 fixed anonymous actor and nullable target. Failures against a known identity
 retain that identity only as the target and still record the initiating actor
 as anonymous, avoiding false attribution to the customer. Database triggers
@@ -166,8 +192,13 @@ keys, append-only key audit, revocable authentication sessions, and expanded
 authentication audit actions. V3 converts any legacy active public key to
 verification-only and removes the single-active-key index so every issued pair
 can retain its own public key. V4 invalidates stale optimistic-lock versions and
-constrains all future key rows to verification-only or revoked states. No
-migration stores private keys or raw tokens.
+constrains all future key rows to verification-only or revoked states. V5 adds
+a database trigger that makes the identity id, subject binding, actor type, and
+creation timestamp immutable. V6 adds authorization-denial audit actions. No
+migration stores private keys, raw credentials, or raw tokens.
+The V6 constraint replacement locks and validates the authentication-audit
+table, so deployment requires an approved lock-timeout and maintenance plan for
+a populated environment.
 If a deployed migration needs correction, add a later migration; do not edit
 an applied migration. Database rollback is forward-only through a new, reviewed
 migration.
@@ -175,23 +206,34 @@ migration.
 ## Deferred Security And Product Work
 
 Bearer authentication is wired, but authentication is not the same as feature
-authorization. Newly registered identities receive only a non-privileged actor
+authorization. Customer identities receive only a non-privileged actor
 authority; they never receive `cif:write` or other business permissions. Each
 feature still needs application-level actor/action/resource/scope policy.
-Existing CIF create/update/close HTTP mutations therefore require
-`cif:write`; customer tokens are denied until CIF implements a reviewed
-onboarding or resource-ownership contract.
+Existing CIF create/update/close HTTP mutations therefore require `cif:write`;
+customer tokens remain denied for those mutations. The reviewed ownership
+increment in this change is intentionally read-only and limited to
+`GET /api/v1/customers/me`.
 
 Employee and back-office password login is intentionally denied until MFA is
-implemented. Also deferred: email/login ownership verification, recovery and
-password reset, logout/all-session revocation API, entitlement/role storage,
-step-up authentication, registration idempotency, a durable multi-node abuse
-limiter, trusted-proxy source attribution, migration to a non-exportable
-KMS/HSM signer, operational alerting, key-table retention/archival, and governed
-database privileges. Per-issuance RSA generation also adds CPU cost to public
+implemented. Also deferred: a single-use customer activation invitation,
+explicit KYC eligibility state, email/login ownership verification, recovery
+and password reset, logout/all-session revocation API, entitlement/role storage,
+step-up authentication, durable concurrent-provisioning idempotency, a durable
+multi-node abuse limiter, trusted-proxy source attribution, migration to a
+non-exportable KMS/HSM signer, operational alerting, key-table
+retention/archival, and governed database privileges. Per-issuance RSA
+generation also adds CPU cost to public
 authentication flows, so distributed abuse controls and capacity testing are
 release gates. Access/session validation fails closed on database/key-state
 failure, but those operational controls still need deployment verification.
+
+Legacy self-registration created active retail identities whose `subjectId`
+equals their identity id. They cannot be mapped safely to CIF by email or other
+heuristics. Runtime authentication rejects that self-binding even when the
+stored status is `ACTIVE`; it does not silently relabel the persisted lifecycle
+state. Inventory plus an approved mapping or quarantine process is a rollout
+gate, and a later append-only migration must implement the governed outcome for
+any environment containing those rows.
 
 ## Flyway Dependency Review
 

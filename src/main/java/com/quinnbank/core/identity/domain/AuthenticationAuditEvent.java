@@ -160,6 +160,7 @@ public class AuthenticationAuditEvent {
     private static boolean allowsAnonymousTarget(AuthenticationAction action) {
         return action == AuthenticationAction.REGISTRATION_REJECTED
                 || action == AuthenticationAction.AUTHENTICATION_FAILED
+                || action == AuthenticationAction.AUTHORIZATION_DENIED
                 || action == AuthenticationAction.TOKEN_REFRESH_REJECTED;
     }
 

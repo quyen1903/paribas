@@ -2,8 +2,9 @@ package com.quinnbank.core.identity.application.service;
 
 import com.quinnbank.core.identity.application.command.LoginIdentityCommand;
 import com.quinnbank.core.identity.application.command.RefreshTokenCommand;
-import com.quinnbank.core.identity.application.command.RegisterIdentityCommand;
+import com.quinnbank.core.identity.application.command.ProvisionCustomerIdentityCommand;
 import com.quinnbank.core.identity.application.exception.InvalidCredentialsException;
+import com.quinnbank.core.identity.application.exception.IdentityProvisioningConflictException;
 import com.quinnbank.core.identity.application.exception.InvalidRefreshTokenException;
 import com.quinnbank.core.identity.application.policy.AuthenticationPolicy;
 import com.quinnbank.core.identity.application.policy.AuthenticationTimestampPolicy;
@@ -15,6 +16,9 @@ import com.quinnbank.core.identity.application.port.IdentityAccountRepository;
 import com.quinnbank.core.identity.application.port.PasswordService;
 import com.quinnbank.core.identity.application.port.TokenPairService;
 import com.quinnbank.core.identity.application.result.IssuedTokenPair;
+import com.quinnbank.core.identity.application.result.IdentitySubjectType;
+import com.quinnbank.core.identity.application.result.ProvisionedIdentityStatus;
+import com.quinnbank.core.identity.application.result.ProvisionedCustomerIdentity;
 import com.quinnbank.core.identity.application.result.VerifiedRefreshToken;
 import com.quinnbank.core.identity.domain.AuthenticationActor;
 import com.quinnbank.core.identity.domain.AuthenticationAuditEvent;
@@ -45,7 +49,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -62,82 +65,182 @@ class IdentityAuthenticationApplicationServicesTest {
     private static final String RAW_PASSWORD = "synthetic-correct-password";
     private static final String WRONG_PASSWORD = "synthetic-wrong-password";
     private static final String ENCODED_PASSWORD = "$2b$12$" + "a".repeat(53);
+    private static final String UNUSABLE_ENCODED_PASSWORD = "$2b$12$" + "u".repeat(53);
     private static final String CORRELATION_ID = "application-test-correlation";
     private static final String SOURCE_ADDRESS = "192.0.2.42";
-
+    private static final UUID CUSTOMER_ID = UUID.fromString("40000000-0000-0000-0000-000000000004");
     @Test
-    void registrationSelectsRetailActorServerSideAndReturnsTokensForTheNewSession() {
+    void provisioningBindsTheCustomerSubjectAndLeavesActivationAndTokensForASeparateFlow() {
         Fixture fixture = new Fixture();
-        RegisterIdentityService service = fixture.registerService();
+        ProvisionCustomerIdentityService service = fixture.provisionService();
 
-        IssuedTokenPair result = service.register(new RegisterIdentityCommand(
+        ProvisionedCustomerIdentity result = service.provision(new ProvisionCustomerIdentityCommand(
+                CUSTOMER_ID,
                 "  Retail-User@Example.Invalid  ",
-                RAW_PASSWORD,
                 CORRELATION_ID,
                 SOURCE_ADDRESS
         ));
 
         IdentityAccount persistedIdentity = fixture.identities.findById(result.identityId()).orElseThrow();
-        AuthenticationSession persistedSession = fixture.sessions.onlySession();
 
         assertAll(
                 () -> assertEquals(IdentityActorType.RETAIL_CUSTOMER, persistedIdentity.getActorType()),
-                () -> assertEquals(persistedIdentity.getId(), persistedIdentity.getSubjectId()),
+                () -> assertEquals(
+                        IdentitySubjectType.RETAIL_CUSTOMER,
+                        result.actorType()
+                ),
+                () -> assertEquals(
+                        ProvisionedIdentityStatus.DISABLED,
+                        result.status()
+                ),
+                () -> assertEquals(CUSTOMER_ID, persistedIdentity.getSubjectId()),
+                () -> assertNotEquals(persistedIdentity.getId(), persistedIdentity.getSubjectId()),
                 () -> assertEquals(LOGIN_IDENTIFIER, persistedIdentity.getLoginIdentifier()),
-                () -> assertEquals(IdentityAccountStatus.ACTIVE, persistedIdentity.getStatus()),
-                () -> assertEquals(ENCODED_PASSWORD, persistedIdentity.getEncodedPasswordForAuthentication()),
+                () -> assertEquals(IdentityAccountStatus.DISABLED, persistedIdentity.getStatus()),
+                () -> assertEquals(
+                        UNUSABLE_ENCODED_PASSWORD,
+                        persistedIdentity.getEncodedPasswordForAuthentication()
+                ),
                 () -> assertNotEquals(RAW_PASSWORD, persistedIdentity.getEncodedPasswordForAuthentication()),
                 () -> assertFalse(persistedIdentity.toString().contains(RAW_PASSWORD)),
-                () -> assertEquals(List.of(RAW_PASSWORD), fixture.passwords.encodedInputs),
-                () -> assertEquals(persistedIdentity.getId(), persistedSession.getIdentityId()),
-                () -> assertEquals(NOW.plus(REFRESH_TTL), persistedSession.getExpiresAt()),
-                () -> assertSame(persistedIdentity, fixture.tokenPairs.lastIssuedIdentity),
-                () -> assertSame(persistedSession, fixture.tokenPairs.lastIssuedSession),
-                () -> assertEquals("synthetic-access-token-1", result.accessToken()),
-                () -> assertEquals("synthetic-refresh-token-1", result.refreshToken()),
+                () -> assertTrue(fixture.passwords.encodedInputs.isEmpty()),
+                () -> assertEquals(1, fixture.passwords.unusableCredentialCount),
+                () -> assertTrue(fixture.sessions.sessions.isEmpty()),
+                () -> assertEquals(0, fixture.tokenPairs.issueCount),
                 () -> assertEquals(SOURCE_ADDRESS, fixture.throttle.lastRegistrationSource),
                 () -> assertEquals(
-                        List.of(
-                                AuthenticationAction.ACCOUNT_PROVISIONED,
-                                AuthenticationAction.ACCOUNT_ENABLED,
-                                AuthenticationAction.TOKEN_PAIR_ISSUED
-                        ),
+                        List.of(AuthenticationAction.ACCOUNT_PROVISIONED),
                         fixture.audits.actions()
-                )
+                ),
+                () -> assertEquals(IdentityActorType.SERVICE_ACCOUNT,
+                        fixture.audits.events.getFirst().getActorType()),
+                () -> assertEquals("cif-onboarding", fixture.audits.events.getFirst().getActorId())
         );
     }
 
     @Test
-    void registrationUsesJwtCompatiblePrecisionForCredentialsSessionAndIssuance() {
-        Instant preciseNow = Instant.parse("2026-08-04T10:15:30.987654321Z");
-        Instant expectedNow = AuthenticationTimestampPolicy.jwtCompatible(preciseNow);
+    void exactProvisioningReplayReturnsTheSameDisabledIdentityWithoutDuplicateAudit() {
         Fixture fixture = new Fixture();
-        RegisterIdentityService service = new RegisterIdentityService(
-                fixture.identities,
-                fixture.sessions,
-                fixture.audits,
-                fixture.passwords,
-                new RegistrationPasswordPolicy(),
-                AUTHENTICATION_POLICY,
-                fixture.throttle,
-                fixture.tokenPairs,
-                Clock.fixed(preciseNow, ZoneOffset.UTC)
-        );
-
-        IssuedTokenPair result = service.register(new RegisterIdentityCommand(
+        ProvisionCustomerIdentityService service = fixture.provisionService();
+        ProvisionCustomerIdentityCommand command = new ProvisionCustomerIdentityCommand(
+                CUSTOMER_ID,
                 LOGIN_IDENTIFIER,
-                RAW_PASSWORD,
                 CORRELATION_ID,
                 SOURCE_ADDRESS
-        ));
-        IdentityAccount identity = fixture.identities.findById(result.identityId()).orElseThrow();
-        AuthenticationSession session = fixture.sessions.onlySession();
+        );
+
+        ProvisionedCustomerIdentity first = service.provision(command);
+        ProvisionedCustomerIdentity replay = service.provision(command);
 
         assertAll(
-                () -> assertEquals(expectedNow, identity.getCredentialsChangedAt()),
-                () -> assertEquals(expectedNow, session.getCreatedAt()),
-                () -> assertEquals(expectedNow.plus(REFRESH_TTL), session.getExpiresAt()),
-                () -> assertEquals(expectedNow, fixture.tokenPairs.lastIssuedAt)
+                () -> assertEquals(first, replay),
+                () -> assertEquals(1, fixture.identities.identities.size()),
+                () -> assertEquals(List.of(AuthenticationAction.ACCOUNT_PROVISIONED), fixture.audits.actions()),
+                () -> assertEquals(1, fixture.passwords.unusableCredentialCount),
+                () -> assertEquals(0, fixture.passwords.matchCount)
+        );
+    }
+
+    @Test
+    void provisioningRejectsAReplayForAnIdentityThatHasAlreadyBeenEnabled() {
+        Fixture fixture = new Fixture();
+        ProvisionCustomerIdentityService service = fixture.provisionService();
+        ProvisionCustomerIdentityCommand command = new ProvisionCustomerIdentityCommand(
+                CUSTOMER_ID,
+                LOGIN_IDENTIFIER,
+                CORRELATION_ID,
+                SOURCE_ADDRESS
+        );
+        ProvisionedCustomerIdentity provisioned = service.provision(command);
+        IdentityAccount existing = fixture.identities.findById(provisioned.identityId()).orElseThrow();
+        existing.enable(
+                AuthenticationActor.of(IdentityActorType.SERVICE_ACCOUNT, "synthetic-activation"),
+                CORRELATION_ID,
+                NOW.plusSeconds(1)
+        );
+
+        assertThrows(IdentityProvisioningConflictException.class, () -> service.provision(command));
+    }
+
+    @Test
+    void provisioningRejectsAReplayForAClosedIdentity() {
+        Fixture fixture = new Fixture();
+        ProvisionCustomerIdentityService service = fixture.provisionService();
+        ProvisionCustomerIdentityCommand command = new ProvisionCustomerIdentityCommand(
+                CUSTOMER_ID,
+                LOGIN_IDENTIFIER,
+                CORRELATION_ID,
+                SOURCE_ADDRESS
+        );
+        ProvisionedCustomerIdentity provisioned = service.provision(command);
+        IdentityAccount existing = fixture.identities.findById(provisioned.identityId()).orElseThrow();
+        existing.close(
+                AuthenticationActor.of(IdentityActorType.SERVICE_ACCOUNT, "synthetic-closure"),
+                "CUSTOMER_IDENTITY_CLOSED",
+                CORRELATION_ID,
+                NOW.plusSeconds(1)
+        );
+
+        assertThrows(IdentityProvisioningConflictException.class, () -> service.provision(command));
+    }
+
+    @Test
+    void newlyProvisionedIdentityCannotLoginBeforeASeparateActivationFlow() {
+        Fixture fixture = new Fixture();
+        ProvisionedCustomerIdentity provisioned = fixture.provisionService().provision(
+                new ProvisionCustomerIdentityCommand(
+                        CUSTOMER_ID,
+                        LOGIN_IDENTIFIER,
+                        CORRELATION_ID,
+                        SOURCE_ADDRESS
+                )
+        );
+
+        assertAll(
+                () -> assertThrows(
+                        InvalidCredentialsException.class,
+                        () -> fixture.loginService().login(new LoginIdentityCommand(
+                                LOGIN_IDENTIFIER,
+                                RAW_PASSWORD,
+                                CORRELATION_ID,
+                                SOURCE_ADDRESS
+                        ))
+                ),
+                () -> assertEquals(
+                        IdentityAccountStatus.DISABLED,
+                        fixture.identities.findById(provisioned.identityId()).orElseThrow().getStatus()
+                ),
+                () -> assertTrue(fixture.sessions.sessions.isEmpty()),
+                () -> assertEquals(0, fixture.tokenPairs.issueCount)
+        );
+    }
+
+    @Test
+    void provisioningRejectsAConflictingReplayWithoutChangingIdentity() {
+        Fixture fixture = new Fixture();
+        ProvisionCustomerIdentityService service = fixture.provisionService();
+        ProvisionCustomerIdentityCommand command = new ProvisionCustomerIdentityCommand(
+                CUSTOMER_ID,
+                LOGIN_IDENTIFIER,
+                CORRELATION_ID,
+                SOURCE_ADDRESS
+        );
+        ProvisionedCustomerIdentity provisioned = service.provision(command);
+
+        assertAll(
+                () -> assertThrows(
+                        IdentityProvisioningConflictException.class,
+                        () -> service.provision(new ProvisionCustomerIdentityCommand(
+                                CUSTOMER_ID,
+                                "changed-login@example.invalid",
+                                CORRELATION_ID,
+                                SOURCE_ADDRESS
+                        ))
+                ),
+                () -> assertEquals(1, fixture.identities.identities.size()),
+                () -> assertEquals(IdentityAccountStatus.DISABLED,
+                        fixture.identities.findById(provisioned.identityId()).orElseThrow().getStatus()),
+                () -> assertEquals(List.of(AuthenticationAction.ACCOUNT_PROVISIONED), fixture.audits.actions())
         );
     }
 
@@ -326,16 +429,12 @@ class IdentityAuthenticationApplicationServicesTest {
         private final RecordingThrottle throttle = new RecordingThrottle();
         private final StubTokenPairService tokenPairs = new StubTokenPairService();
 
-        private RegisterIdentityService registerService() {
-            return new RegisterIdentityService(
+        private ProvisionCustomerIdentityService provisionService() {
+            return new ProvisionCustomerIdentityService(
                     identities,
-                    sessions,
                     audits,
                     passwords,
-                    new RegistrationPasswordPolicy(),
-                    AUTHENTICATION_POLICY,
                     throttle,
-                    tokenPairs,
                     CLOCK
             );
         }
@@ -369,7 +468,7 @@ class IdentityAuthenticationApplicationServicesTest {
             UUID identityId = UUID.randomUUID();
             IdentityAccount identity = IdentityAccount.provision(
                     identityId,
-                    identityId,
+                    UUID.randomUUID(),
                     IdentityActorType.RETAIL_CUSTOMER,
                     loginIdentifier,
                     EncodedPassword.fromPasswordEncoder(ENCODED_PASSWORD),
@@ -411,6 +510,17 @@ class IdentityAuthenticationApplicationServicesTest {
         @Override
         public Optional<IdentityAccount> findByIdForUpdate(UUID identityId) {
             return findById(identityId);
+        }
+
+        @Override
+        public Optional<IdentityAccount> findByActorTypeAndSubjectIdForUpdate(
+                IdentityActorType actorType,
+                UUID subjectId
+        ) {
+            return identities.values().stream()
+                    .filter(identity -> identity.getActorType() == actorType)
+                    .filter(identity -> identity.getSubjectId().equals(subjectId))
+                    .findFirst();
         }
 
         @Override
@@ -460,6 +570,7 @@ class IdentityAuthenticationApplicationServicesTest {
 
     private static final class StubPasswordService implements PasswordService {
         private final List<String> encodedInputs = new ArrayList<>();
+        private int unusableCredentialCount;
         private int matchCount;
         private int dummyMatchCount;
 
@@ -467,6 +578,12 @@ class IdentityAuthenticationApplicationServicesTest {
         public EncodedPassword encode(String rawPassword) {
             encodedInputs.add(rawPassword);
             return EncodedPassword.fromPasswordEncoder(ENCODED_PASSWORD);
+        }
+
+        @Override
+        public EncodedPassword createUnusableCredential() {
+            unusableCredentialCount++;
+            return EncodedPassword.fromPasswordEncoder(UNUSABLE_ENCODED_PASSWORD);
         }
 
         @Override
@@ -503,9 +620,6 @@ class IdentityAuthenticationApplicationServicesTest {
     private static final class StubTokenPairService implements TokenPairService {
         private final List<String> verifiedInputs = new ArrayList<>();
         private VerifiedRefreshToken verifiedRefreshToken;
-        private IdentityAccount lastIssuedIdentity;
-        private AuthenticationSession lastIssuedSession;
-        private Instant lastIssuedAt;
         private int issueCount;
 
         @Override
@@ -515,9 +629,6 @@ class IdentityAuthenticationApplicationServicesTest {
                 Instant now
         ) {
             issueCount++;
-            lastIssuedIdentity = identityAccount;
-            lastIssuedSession = authenticationSession;
-            lastIssuedAt = now;
             return new IssuedTokenPair(
                     identityAccount.getId(),
                     "synthetic-access-token-" + issueCount,

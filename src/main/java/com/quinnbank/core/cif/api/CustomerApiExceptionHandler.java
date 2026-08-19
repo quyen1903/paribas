@@ -1,10 +1,12 @@
 package com.quinnbank.core.cif.api;
 
 import com.quinnbank.core.cif.api.response.ApiErrorResponse;
+import com.quinnbank.core.cif.application.exception.CustomerAccessDeniedException;
 import com.quinnbank.core.cif.domain.exception.CustomerClosedException;
 import com.quinnbank.core.cif.domain.exception.CustomerNotFoundException;
 import com.quinnbank.core.cif.domain.exception.DuplicateCustomerEmailException;
 import jakarta.validation.ConstraintViolationException;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -21,6 +23,13 @@ public class CustomerApiExceptionHandler {
     public ResponseEntity<ApiErrorResponse> customerNotFound() {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ApiErrorResponse.of("CUSTOMER_NOT_FOUND", "Customer was not found."));
+    }
+
+    @ExceptionHandler(CustomerAccessDeniedException.class)
+    public ResponseEntity<ApiErrorResponse> customerAccessDenied() {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .cacheControl(CacheControl.noStore())
+                .body(ApiErrorResponse.of("CUSTOMER_ACCESS_DENIED", "The customer profile is not available."));
     }
 
     @ExceptionHandler(DuplicateCustomerEmailException.class)

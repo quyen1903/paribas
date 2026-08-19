@@ -2,10 +2,7 @@ package com.quinnbank.core.identity.api;
 
 import com.quinnbank.core.identity.api.response.IdentityApiErrorResponse;
 import com.quinnbank.core.identity.application.exception.AuthenticationRateLimitExceededException;
-import com.quinnbank.core.identity.application.exception.ConcurrentIdentityRegistrationException;
-import com.quinnbank.core.identity.application.exception.IdentityAlreadyExistsException;
 import com.quinnbank.core.identity.application.exception.InvalidCredentialsException;
-import com.quinnbank.core.identity.application.exception.InvalidIdentityRegistrationException;
 import com.quinnbank.core.identity.application.exception.InvalidRefreshTokenException;
 import com.quinnbank.core.identity.application.exception.SigningKeyUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -26,26 +23,6 @@ import java.util.Map;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 @RestControllerAdvice(assignableTypes = IdentityAuthenticationController.class)
 public class IdentityApiExceptionHandler {
-    @ExceptionHandler(IdentityAlreadyExistsException.class)
-    public ResponseEntity<IdentityApiErrorResponse> identityAlreadyExists(HttpServletRequest request) {
-        return error(
-            HttpStatus.CONFLICT,
-            "REGISTRATION_CONFLICT",
-            "Identity registration could not be completed.",
-            request
-        );
-    }
-
-    @ExceptionHandler(ConcurrentIdentityRegistrationException.class)
-    public ResponseEntity<IdentityApiErrorResponse> concurrentRegistrationConflict(HttpServletRequest request) {
-        return error(
-            HttpStatus.CONFLICT,
-            "REGISTRATION_CONFLICT",
-            "Identity registration could not be completed.",
-            request
-        );
-    }
-
     @ExceptionHandler(InvalidCredentialsException.class)
     public ResponseEntity<IdentityApiErrorResponse> invalidCredentials(HttpServletRequest request) {
         return error(
@@ -100,16 +77,6 @@ public class IdentityApiExceptionHandler {
             .badRequest()
             .cacheControl(CacheControl.noStore())
             .body(IdentityApiErrorResponse.validation(correlationId(request), fieldErrors));
-    }
-
-    @ExceptionHandler(InvalidIdentityRegistrationException.class)
-    public ResponseEntity<IdentityApiErrorResponse> invalidRegistration(HttpServletRequest request) {
-        return error(
-            HttpStatus.BAD_REQUEST,
-            "INVALID_REGISTRATION_REQUEST",
-            "The identity registration request is invalid.",
-            request
-        );
     }
 
     @ExceptionHandler(HttpMessageNotReadableException.class)
